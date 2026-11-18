@@ -1,0 +1,50 @@
+{
+  "version": "1.0",
+  "appId": "f90e3233-625b-40ce-be61-2b0c9a25933d",
+  "appDisplayName": "KYC Sanctions Screening",
+  "region": "prod",
+  "appType": "CodeApp",
+  "environmentId": "d342b729-49aa-ebca-8ede-9a148dc57d52",
+  "description": " ",
+  "buildPath": "./dist",
+  "buildEntryPoint": "index.html",
+  "localAppUrl": "http://localhost:3000",
+  "logoPath": "Default",
+  "connectionReferences": {
+    "dda0832c-55c6-40c9-9932-52434218cd27": {
+      "id": "/providers/microsoft.powerapps/apis/shared_sharepointonline",
+      "displayName": "SharePoint"
+    },
+    "6480195b-9004-48f2-a46c-a45c2c2e29b3": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_logicflows",
+      "displayName": "Logic flows",
+      "dataSources": [
+        "kyc_screencustomer"
+      ],
+      "workflowDetails": {
+        "workflowEntityId": "7018108b-4ae3-f111-84e8-70a8a5a68669",
+        "workflowDisplayName": "KYC - Screen Customer",
+        "workflowName": "3183a1c6-245f-8858-a9ab-d4065d2b8d74",
+        "dependencies": {
+          "shared_sharepointonline": "dda0832c-55c6-40c9-9932-52434218cd27"
+        }
+      }
+    },
+    "5ea5993b-fb5f-4495-806c-6c6a0e533112": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_logicflows",
+      "displayName": "Logic flows",
+      "dataSources": [
+        "kyc_recorddecision"
+      ],
+      "workflowDetails": {
+        "workflowEntityId": "fd21ad9e-74e3-f111-84e8-70a8a5a68669",
+        "workflowDisplayName": "KYC - Record Decision",
+        "workflowName": "149cad11-0ac6-90fc-4cbe-1e76c2e10bbd",
+        "dependencies": {
+          "shared_sharepointonline": "dda0832c-55c6-40c9-9932-52434218cd27"
+        }
+      }
+    }
+  },
+  "databaseReferences": {}
+}
