@@ -16,6 +16,10 @@ export interface ManualTriggerInput {
   text_4: string;
   // Please enter your input
   text_5: string;
+  // ReviewerDecision
+  text_6?: string;
+  // reviewercomments
+  text_7?: string;
 }
 
 export interface ResponseActionOutput {

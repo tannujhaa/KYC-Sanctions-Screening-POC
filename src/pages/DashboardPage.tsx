@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate, useOutletContext } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { Shield, AlertTriangle, CheckCircle2, Clock, Plus } from 'lucide-react';
+import { getContext } from '@microsoft/power-apps/app';
+import type { IContext } from '@microsoft/power-apps/app';
 import { kycService } from '../services/kycService';
 import type { DashboardStats, KycCase } from '../types/kyc';
 import { StackedBarChart } from '../components/dashboard/StackedBarChart';
@@ -8,23 +10,32 @@ import { NeedsReviewList } from '../components/dashboard/NeedsReviewList';
 import { RecentCasesTable } from '../components/dashboard/RecentCasesTable';
 import { AiInsightsCard } from '../components/dashboard/AiInsightsCard';
 
-interface OutletContextType {
-  openCopilot: () => void;
-}
-
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
-  const { openCopilot } = useOutletContext<OutletContextType>();
 
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [cases, setCases] = useState<KycCase[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [userName, setUserName] = useState<string>('Reviewer');
 
-  // Current reviewer profile
-  const reviewer = {
-    fullName: 'Demo Reviewer',
-    firstName: 'Demo',
-  };
+  // Fetch logged in user name dynamically
+  useEffect(() => {
+    getContext()
+      .then((ctx: IContext) => {
+        if (ctx?.user?.fullName) {
+          setUserName(ctx.user.fullName);
+        } else if (ctx?.user?.userPrincipalName) {
+          const emailName = ctx.user.userPrincipalName.split('@')[0];
+          const formatted = emailName
+            .replace(/[._-]/g, ' ')
+            .replace(/\b\w/g, (c) => c.toUpperCase());
+          setUserName(formatted);
+        }
+      })
+      .catch((e: unknown) => {
+        console.warn('[Power Apps] getContext() not available in DashboardPage:', e);
+      });
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -78,15 +89,23 @@ export const DashboardPage: React.FC = () => {
       ? `${stats.oldestPendingMinutes} min`
       : `${Math.floor(stats.oldestPendingMinutes / 60)} h ${stats.oldestPendingMinutes % 60} min`;
 
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 18) return 'Good afternoon';
+    return 'Good evening';
+  };
+
+  const pendingCount = cases.filter((c) => c.reviewerDecision === 'Pending review').length;
+
   return (
     <div
       style={{
-        padding: '24px 32px 48px 32px',
-        maxWidth: '1440px',
-        margin: '0 auto',
+        padding: '20px 24px 36px 24px',
+        width: '100%',
         display: 'flex',
         flexDirection: 'column',
-        gap: '24px',
+        gap: '20px',
         boxSizing: 'border-box',
       }}
     >
@@ -95,7 +114,7 @@ export const DashboardPage: React.FC = () => {
         style={{
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'flex-start',
+          alignItems: 'center',
           flexWrap: 'wrap',
           gap: '16px',
         }}
@@ -103,24 +122,15 @@ export const DashboardPage: React.FC = () => {
         <div>
           <h1
             style={{
-              margin: '0 0 4px 0',
-              fontSize: '26px',
+              margin: 0,
+              fontSize: '24px',
               fontWeight: 700,
               color: '#111827',
               letterSpacing: '-0.3px',
             }}
           >
-            Good morning, {reviewer.firstName} Reviewer
+            {getGreeting()}, {userName}
           </h1>
-          <p
-            style={{
-              margin: 0,
-              fontSize: '13px',
-              color: '#6B7280',
-            }}
-          >
-            Screening position as of Wed 18 Nov 2026, 10:45 · last 14 days
-          </p>
         </div>
 
         {/* Action Buttons */}
@@ -149,10 +159,10 @@ export const DashboardPage: React.FC = () => {
               e.currentTarget.style.borderColor = '#D1D5DB';
             }}
           >
-            Review queue ({stats.pendingReview})
+            Review queue ({pendingCount})
           </button>
 
-          {/* + New screening */}
+          {/* + New case */}
           <button
             onClick={() => navigate('/new-case')}
             style={{
@@ -174,7 +184,7 @@ export const DashboardPage: React.FC = () => {
             onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#831B84')}
           >
             <Plus size={16} strokeWidth={2.5} />
-            <span>New screening</span>
+            <span>New case</span>
           </button>
         </div>
       </div>
@@ -380,10 +390,12 @@ export const DashboardPage: React.FC = () => {
 
       {/* 3. MIDDLE ROW: Stacked Column Chart (Left) & Needs Your Review (Right) */}
       <div
+        className="dashboard-grid-row"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1.6fr) minmax(0, 1fr)',
+          gridTemplateColumns: 'minmax(0, 1.6fr) minmax(320px, 1fr)',
           gap: '20px',
+          width: '100%',
         }}
       >
         {/* Screenings Per Day Stacked Bar Chart */}
@@ -402,10 +414,12 @@ export const DashboardPage: React.FC = () => {
 
       {/* 4. BOTTOM ROW: Recent Cases Table (Left) & AI Insights Card (Right) */}
       <div
+        className="dashboard-grid-row"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1.6fr) minmax(0, 1fr)',
+          gridTemplateColumns: 'minmax(0, 1.6fr) minmax(320px, 1fr)',
           gap: '20px',
+          width: '100%',
         }}
       >
         {/* Recent Cases */}
@@ -414,7 +428,7 @@ export const DashboardPage: React.FC = () => {
         {/* AI Insights Card */}
         <AiInsightsCard
           stats={stats}
-          onAskAssistant={openCopilot}
+          cases={cases}
         />
       </div>
     </div>

@@ -4,13 +4,13 @@
  */
 
 export interface ManualTriggerInput {
-  // Please enter your input
+  /** CaseID - Case Title in SharePoint KYC_Cases (e.g. "KYC-20261118-194444") */
   text: string;
-  // Please enter your input
+  /** ReviewerDecision ("Approved" | "Rejected" | "Escalated") */
   text_1: string;
-  // Please enter your input
+  /** ReviewerComment - Comments provided by the reviewer */
   text_2: string;
-  // Please enter your input
+  /** ReviewerEmail - Logged-in reviewer email */
   text_3: string;
 }
 

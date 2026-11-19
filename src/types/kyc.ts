@@ -1,3 +1,17 @@
+export interface DocumentPayloadItem {
+  name: string;
+  contentBytes: string;
+}
+
+export interface ScreenCustomerInput {
+  customerName: string;
+  dob: string;
+  nationality: string;
+  address: string;
+  documents?: DocumentPayloadItem[];
+  documentNames?: string[];
+}
+
 export interface SanctionsEntry {
   id: string;
   fullName: string;
@@ -10,6 +24,20 @@ export interface SanctionsEntry {
 
 export type CheckResult = 'No Match' | 'Potential Match';
 export type ReviewerDecision = 'Pending review' | 'Approved' | 'Rejected' | 'Escalated';
+
+export type ScreeningStage =
+  | 'creating_case'
+  | 'filing_documents'
+  | 'screening'
+  | 'preparing_result'
+  | 'completed'
+  | 'failed';
+
+export interface ScreeningProgress {
+  stage: ScreeningStage;
+  caseId?: string;
+  error?: string;
+}
 
 export interface KycCase {
   caseId: string;
@@ -27,6 +55,7 @@ export interface KycCase {
   decidedOn?: string | null;
   documentsLink?: string | null;
   documentNames?: string[];
+  documents?: DocumentPayloadItem[];
   createdAt: string; // ISO format or date string
 }
 

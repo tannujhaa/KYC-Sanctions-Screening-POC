@@ -115,6 +115,20 @@
               "type": "string",
               "x-ms-content-hint": "TEXT",
               "x-ms-dynamically-added": true
+            },
+            "text_6": {
+              "description": "Please enter your input",
+              "title": "ReviewerDecision",
+              "type": "string",
+              "x-ms-content-hint": "TEXT",
+              "x-ms-dynamically-added": true
+            },
+            "text_7": {
+              "description": "Please enter your input",
+              "title": "reviewercomments",
+              "type": "string",
+              "x-ms-content-hint": "TEXT",
+              "x-ms-dynamically-added": true
             }
           },
           "required": [

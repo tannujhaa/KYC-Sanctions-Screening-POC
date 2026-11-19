@@ -18,6 +18,7 @@ function App() {
           <Route path="cases" element={<ScreeningCasesPage />} />
           <Route path="result/:caseId" element={<ScreeningResultPage />} />
           <Route path="audit" element={<AuditTrailPage />} />
+          <Route path="audit/:caseId" element={<AuditTrailPage />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Routes>

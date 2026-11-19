@@ -8,9 +8,14 @@ interface NeedsReviewListProps {
 }
 
 // Helper to format minutes into human-readable e.g. "2 h 10 min" or "18 min"
-function formatOpenTime(createdAtStr: string): string {
-  const now = new Date('2026-11-18T10:45:00Z').getTime();
-  const created = new Date(createdAtStr).getTime();
+function formatOpenTime(createdAtStr?: string | null): string {
+  if (!createdAtStr) return 'recently';
+  const now = Date.now();
+  let created = new Date(createdAtStr).getTime();
+  if (isNaN(created)) {
+    created = new Date(createdAtStr.replace(/,/g, '')).getTime();
+  }
+  if (isNaN(created)) return 'recently';
   const diffMins = Math.max(1, Math.floor((now - created) / (1000 * 60)));
 
   if (diffMins < 60) {

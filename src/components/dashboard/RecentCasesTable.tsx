@@ -105,7 +105,16 @@ export const RecentCasesTable: React.FC<RecentCasesTableProps> = ({ cases }) => 
           </thead>
           <tbody>
             {recent6.map((c) => {
-              const isPotential = c.checkResult === 'Potential Match';
+              const isPotential =
+                c.checkResult === 'Potential Match' ||
+                Boolean(
+                  c.matchedEntry &&
+                  c.matchedEntry.trim() !== '' &&
+                  c.matchedEntry.toLowerCase() !== 'none' &&
+                  c.matchedEntry.toLowerCase() !== 'null' &&
+                  c.matchedEntry.toLowerCase() !== '—' &&
+                  c.matchedEntry.toLowerCase() !== '-'
+                );
 
               return (
                 <tr
@@ -152,7 +161,7 @@ export const RecentCasesTable: React.FC<RecentCasesTableProps> = ({ cases }) => 
                         whiteSpace: 'nowrap',
                       }}
                     >
-                      {c.checkResult}
+                      {isPotential ? 'Potential Match' : 'No Match'}
                     </span>
                   </td>
 

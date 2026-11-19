@@ -10,10 +10,12 @@ import {
   Shield,
   Bot,
   X,
-  Send,
+  RotateCcw,
 } from 'lucide-react';
 import xebiaLogo from '../../assets/xebia-logo.png';
 import { kycService } from '../../services/kycService';
+import { getContext } from '@microsoft/power-apps/app';
+import type { IContext } from '@microsoft/power-apps/app';
 
 export const AppLayout: React.FC = () => {
   const location = useLocation();
@@ -21,16 +23,34 @@ export const AppLayout: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [pendingCount, setPendingCount] = useState(4);
   const [isCopilotOpen, setIsCopilotOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<
-    Array<{ sender: 'agent' | 'user'; text: string; time: string }>
-  >([
-    {
-      sender: 'agent',
-      text: 'Hello Demo Reviewer! I am your KYC & Sanctions Assistant for this demo environment. Ask me about flagged cases, match reasons, or sanctions list sources.',
-      time: '10:45 AM',
-    },
-  ]);
-  const [chatInput, setChatInput] = useState('');
+  const [iframeKey, setIframeKey] = useState(0);
+  const [currentUser, setCurrentUser] = useState({
+    fullName: 'Demo Reviewer',
+    email: 'demo.reviewer@xebia.com',
+    initials: 'DR',
+  });
+
+  // Fetch logged in user context
+  useEffect(() => {
+    getContext()
+      .then((ctx: IContext) => {
+        if (ctx?.user?.fullName || ctx?.user?.userPrincipalName) {
+          const name = ctx.user.fullName || ctx.user.userPrincipalName?.split('@')[0] || 'Demo Reviewer';
+          const initials = name
+            .split(' ')
+            .map((part: string) => part[0])
+            .join('')
+            .toUpperCase()
+            .slice(0, 2) || 'DR';
+          setCurrentUser({
+            fullName: name,
+            email: ctx.user.userPrincipalName || 'demo.reviewer@xebia.com',
+            initials,
+          });
+        }
+      })
+      .catch((e: unknown) => console.warn('[Power Apps] getContext() not available in AppLayout:', e));
+  }, []);
 
   // Fetch pending review cases count
   useEffect(() => {
@@ -44,32 +64,6 @@ export const AppLayout: React.FC = () => {
     if (e.key === 'Enter' && searchQuery.trim()) {
       navigate(`/cases?q=${encodeURIComponent(searchQuery.trim())}`);
     }
-  };
-
-  const handleSendMessage = (textToSend?: string) => {
-    const text = textToSend || chatInput;
-    if (!text.trim()) return;
-
-    const userMsg = { sender: 'user' as const, text, time: '10:46 AM' };
-    setChatMessages((prev) => [...prev, userMsg]);
-    if (!textToSend) setChatInput('');
-
-    // Deterministic Mock Responses
-    setTimeout(() => {
-      let reply = "This is a demonstration response. The data used across this app is fictionalized for KYC & sanctions screening validation.";
-      const lower = text.toLowerCase();
-      if (lower.includes('kyc-0042') || lower.includes('lena varga')) {
-        reply = "Case KYC-0042 (Lena Varga) was flagged because the customer's name directly matches entry 'Lena Varga' (SANC-004) and the Date of Birth (1990-02-14) is identical. Status is currently Pending Review.";
-      } else if (lower.includes('kyc-0034') || lower.includes('selim')) {
-        reply = "Case KYC-0034 (Selim Arcadius) matched SANC-001 with 100% confirmation on primary name, DOB (1978-04-12), and Syrian nationality. It has been pending for over 2 hours.";
-      } else if (lower.includes('match') || lower.includes('rule')) {
-        reply = "Screening Rule: A case is marked as a Potential Match if the normalized customer name or alias contains/matches a list entry AND either DOB or Nationality matches.";
-      } else if (lower.includes('sanction') || lower.includes('source')) {
-        reply = "The current source is 'Mock Sanctions List' with 7 fictional designated entities. No real individual data is present.";
-      }
-
-      setChatMessages((prev) => [...prev, { sender: 'agent', text: reply, time: '10:46 AM' }]);
-    }, 400);
   };
 
   // Determine current page title
@@ -88,23 +82,29 @@ export const AppLayout: React.FC = () => {
     <div
       style={{
         display: 'flex',
-        minHeight: '100vh',
+        height: '100vh',
+        width: '100vw',
+        maxWidth: '100vw',
+        overflow: 'hidden',
         backgroundColor: '#F8F9FA',
         fontFamily: "system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
         color: '#111827',
       }}
     >
-      {/* SIDEBAR */}
+      {/* SIDEBAR (Strictly non-scrollable, fixed full height) */}
       <aside
         style={{
           width: '230px',
           minWidth: '230px',
+          height: '100vh',
           backgroundColor: '#FFFFFF',
           borderRight: '1px solid #E5E7EB',
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'space-between',
+          flexShrink: 0,
           zIndex: 10,
+          userSelect: 'none',
         }}
       >
         <div>
@@ -176,7 +176,7 @@ export const AppLayout: React.FC = () => {
               <span>Dashboard</span>
             </NavLink>
 
-            {/* 2. New Screening */}
+            {/* 2. New Screening / New Case */}
             <NavLink
               to="/new-case"
               style={({ isActive }) => ({
@@ -194,7 +194,7 @@ export const AppLayout: React.FC = () => {
               })}
             >
               <UserPlus size={18} />
-              <span>New Screening</span>
+              <span>New Case</span>
             </NavLink>
 
             {/* 3. Screening Cases (with badge) */}
@@ -216,7 +216,7 @@ export const AppLayout: React.FC = () => {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <Files size={18} />
-                <span>Screening Cases</span>
+                <span>Cases</span>
               </div>
               {pendingCount > 0 && (
                 <span
@@ -256,70 +256,31 @@ export const AppLayout: React.FC = () => {
             </NavLink>
           </nav>
         </div>
-
-        {/* Bottom Screening Source Card */}
-        <div style={{ padding: '16px 14px' }}>
-          <div
-            style={{
-              backgroundColor: '#F8FAFC',
-              border: '1px solid #E2E8F0',
-              borderRadius: '8px',
-              padding: '10px 12px',
-            }}
-          >
-            <div
-              style={{
-                fontSize: '10px',
-                fontWeight: 700,
-                color: '#94A3B8',
-                letterSpacing: '0.5px',
-                textTransform: 'uppercase',
-                marginBottom: '4px',
-              }}
-            >
-              Screening Source
-            </div>
-            <div
-              style={{
-                fontSize: '12px',
-                fontWeight: 600,
-                color: '#1E293B',
-              }}
-            >
-              Mock Sanctions List
-            </div>
-            <div
-              style={{
-                fontSize: '11px',
-                color: '#64748B',
-                marginTop: '2px',
-              }}
-            >
-              7 entries · fictional data
-            </div>
-          </div>
-        </div>
       </aside>
 
       {/* MAIN CONTAINER */}
       <div
         style={{
           flex: 1,
+          height: '100vh',
           display: 'flex',
           flexDirection: 'column',
+          overflow: 'hidden',
           minWidth: 0,
         }}
       >
-        {/* TOP BAR */}
+        {/* TOP BAR (Strictly non-scrollable, fixed height) */}
         <header
           style={{
             height: '56px',
+            minHeight: '56px',
             backgroundColor: '#FFFFFF',
             borderBottom: '1px solid #E5E7EB',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             padding: '0 24px',
+            flexShrink: 0,
             zIndex: 5,
           }}
         >
@@ -375,22 +336,6 @@ export const AppLayout: React.FC = () => {
                 onBlur={(e) => (e.target.style.borderColor = '#E5E7EB')}
               />
             </div>
-
-            {/* DEMO · MOCKED DATA Pill */}
-            <span
-              style={{
-                backgroundColor: '#FEF3C7',
-                color: '#92400E',
-                fontSize: '10px',
-                fontWeight: 700,
-                letterSpacing: '0.5px',
-                padding: '3px 8px',
-                borderRadius: '9999px',
-                textTransform: 'uppercase',
-              }}
-            >
-              Demo · Mocked Data
-            </span>
           </div>
 
           {/* Right: Notifications & User Profile */}
@@ -447,10 +392,10 @@ export const AppLayout: React.FC = () => {
             >
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontSize: '12px', fontWeight: 600, color: '#111827', lineHeight: 1.2 }}>
-                  Demo Reviewer
+                  {currentUser.fullName}
                 </div>
-                <div style={{ fontSize: '11px', color: '#6B7280' }}>
-                  KYC Analyst · L1
+                <div style={{ fontSize: '11px', color: '#6B7280' }} title={currentUser.email}>
+                  {currentUser.email.length > 24 ? `${currentUser.email.slice(0, 22)}...` : currentUser.email}
                 </div>
               </div>
 
@@ -469,38 +414,112 @@ export const AppLayout: React.FC = () => {
                   justifyContent: 'center',
                 }}
               >
-                DR
+                {currentUser.initials}
               </div>
             </div>
           </div>
         </header>
 
-        {/* MAIN BODY OUTLET */}
-        <main style={{ flex: 1, overflowY: 'auto' }}>
+        {/* MAIN BODY OUTLET (The only scrollable section) */}
+        <main
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            position: 'relative',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
           <Outlet context={{ openCopilot: () => setIsCopilotOpen(true) }} />
         </main>
       </div>
 
-      {/* COPILOT STUDIO AGENT SIDE DRAWER */}
+      {/* FLOATING CHATBOT AGENT BUTTON (Available on all pages) */}
+      <button
+        type="button"
+        onClick={() => setIsCopilotOpen((prev) => !prev)}
+        title={isCopilotOpen ? 'Close KYC assistant panel' : 'Chat with KYC Copilot Assistant'}
+        style={{
+          position: 'fixed',
+          bottom: '24px',
+          right: '24px',
+          zIndex: 900,
+          backgroundColor: '#831B84',
+          color: '#FFFFFF',
+          border: 'none',
+          borderRadius: '9999px',
+          padding: '12px 20px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '9px',
+          cursor: 'pointer',
+          boxShadow: '0 4px 18px rgba(131, 27, 132, 0.42)',
+          fontWeight: 600,
+          fontSize: '13px',
+          transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.transform = 'translateY(-2px)';
+          e.currentTarget.style.boxShadow = '0 6px 24px rgba(131, 27, 132, 0.55)';
+          e.currentTarget.style.backgroundColor = '#6e166f';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.transform = 'translateY(0)';
+          e.currentTarget.style.boxShadow = '0 4px 18px rgba(131, 27, 132, 0.42)';
+          e.currentTarget.style.backgroundColor = '#831B84';
+        }}
+      >
+        <div
+          style={{
+            position: 'relative',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Bot size={18} />
+          <span
+            style={{
+              position: 'absolute',
+              top: '-3px',
+              right: '-3px',
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              backgroundColor: '#22C55E',
+              border: '1.5px solid #831B84',
+            }}
+          />
+        </div>
+        <span>{isCopilotOpen ? 'Close chat' : 'Chat with us'}</span>
+      </button>
+
+      {/* COPILOT STUDIO AGENT FLOATING CHATBOT WIDGET */}
       {isCopilotOpen && (
         <div
           style={{
             position: 'fixed',
-            top: 0,
-            right: 0,
-            bottom: 0,
-            width: '380px',
+            bottom: '84px',
+            right: '24px',
+            width: '400px',
+            maxWidth: 'calc(100vw - 32px)',
+            height: '540px',
+            maxHeight: 'calc(100vh - 110px)',
             backgroundColor: '#FFFFFF',
-            boxShadow: '-4px 0 16px rgba(0, 0, 0, 0.1)',
-            zIndex: 50,
+            borderRadius: '16px',
+            boxShadow: '0 12px 36px rgba(0, 0, 0, 0.22), 0 4px 12px rgba(0, 0, 0, 0.08)',
+            border: '1px solid #E5E7EB',
+            zIndex: 1000,
             display: 'flex',
             flexDirection: 'column',
+            overflow: 'hidden',
           }}
         >
           {/* Drawer Header */}
           <div
             style={{
-              padding: '16px 20px',
+              padding: '14px 18px',
               borderBottom: '1px solid #E5E7EB',
               display: 'flex',
               justifyContent: 'space-between',
@@ -508,191 +527,117 @@ export const AppLayout: React.FC = () => {
               backgroundColor: '#FAF4FB',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <div
                 style={{
-                  width: '28px',
-                  height: '28px',
-                  borderRadius: '6px',
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '8px',
                   backgroundColor: '#831B84',
                   color: '#FFFFFF',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
+                  boxShadow: '0 2px 6px rgba(131, 27, 132, 0.25)',
                 }}
               >
-                <Bot size={16} />
+                <Bot size={18} />
               </div>
               <div>
                 <div style={{ fontSize: '14px', fontWeight: 700, color: '#111827' }}>
                   KYC Copilot Assistant
                 </div>
-                <div style={{ fontSize: '11px', color: '#6B7280' }}>
-                  Copilot Studio · Mocked cases
+                <div
+                  style={{
+                    fontSize: '11px',
+                    color: '#6B7280',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                  }}
+                >
+                  <span
+                    style={{
+                      width: '6px',
+                      height: '6px',
+                      borderRadius: '50%',
+                      backgroundColor: '#16A34A',
+                      display: 'inline-block',
+                    }}
+                  />
+                  <span>Copilot Studio · Active</span>
                 </div>
               </div>
             </div>
 
-            <button
-              onClick={() => setIsCopilotOpen(false)}
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: '#6B7280',
-                padding: '4px',
-              }}
-            >
-              <X size={18} />
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <button
+                type="button"
+                onClick={() => setIframeKey((prev) => prev + 1)}
+                title="Reload chat session"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: '#6B7280',
+                  padding: '6px',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#EDE0EE')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              >
+                <RotateCcw size={15} />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsCopilotOpen(false)}
+                title="Close side panel"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: '#6B7280',
+                  padding: '6px',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#EDE0EE')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              >
+                <X size={18} />
+              </button>
+            </div>
           </div>
 
-          {/* Quick Questions Chips */}
-          <div
-            style={{
-              padding: '12px 16px',
-              backgroundColor: '#F9FAFB',
-              borderBottom: '1px solid #E5E7EB',
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: '6px',
-            }}
-          >
-            <button
-              onClick={() => handleSendMessage('Why was case KYC-0042 flagged?')}
-              style={{
-                backgroundColor: '#FFFFFF',
-                border: '1px solid #E5E7EB',
-                borderRadius: '9999px',
-                padding: '4px 10px',
-                fontSize: '11px',
-                color: '#4B5563',
-                cursor: 'pointer',
-              }}
-            >
-              Why was KYC-0042 flagged?
-            </button>
-            <button
-              onClick={() => handleSendMessage('What is the matching rule?')}
-              style={{
-                backgroundColor: '#FFFFFF',
-                border: '1px solid #E5E7EB',
-                borderRadius: '9999px',
-                padding: '4px 10px',
-                fontSize: '11px',
-                color: '#4B5563',
-                cursor: 'pointer',
-              }}
-            >
-              Explain matching rule
-            </button>
-            <button
-              onClick={() => handleSendMessage('Which sanctions list is used?')}
-              style={{
-                backgroundColor: '#FFFFFF',
-                border: '1px solid #E5E7EB',
-                borderRadius: '9999px',
-                padding: '4px 10px',
-                fontSize: '11px',
-                color: '#4B5563',
-                cursor: 'pointer',
-              }}
-            >
-              Sanctions source
-            </button>
-          </div>
-
-          {/* Chat Messages */}
+          {/* Copilot Studio Live WebChat Iframe */}
           <div
             style={{
               flex: 1,
-              overflowY: 'auto',
-              padding: '16px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px',
-            }}
-          >
-            {chatMessages.map((msg, i) => (
-              <div
-                key={i}
-                style={{
-                  alignSelf: msg.sender === 'user' ? 'flex-end' : 'flex-start',
-                  maxWidth: '85%',
-                }}
-              >
-                <div
-                  style={{
-                    backgroundColor: msg.sender === 'user' ? '#831B84' : '#F3F4F6',
-                    color: msg.sender === 'user' ? '#FFFFFF' : '#1F2937',
-                    padding: '10px 14px',
-                    borderRadius:
-                      msg.sender === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
-                    fontSize: '12px',
-                    lineHeight: 1.45,
-                  }}
-                >
-                  {msg.text}
-                </div>
-                <div
-                  style={{
-                    fontSize: '10px',
-                    color: '#9CA3AF',
-                    marginTop: '2px',
-                    textAlign: msg.sender === 'user' ? 'right' : 'left',
-                  }}
-                >
-                  {msg.time}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Chat Input */}
-          <div
-            style={{
-              padding: '12px 16px',
-              borderTop: '1px solid #E5E7EB',
-              display: 'flex',
-              gap: '8px',
+              position: 'relative',
+              width: '100%',
+              height: '100%',
+              overflow: 'hidden',
               backgroundColor: '#FFFFFF',
             }}
           >
-            <input
-              type="text"
-              placeholder="Ask about a case or match reason..."
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleSendMessage();
-              }}
+            <iframe
+              key={iframeKey}
+              src="https://copilotstudio.microsoft.com/environments/d342b729-49aa-ebca-8ede-9a148dc57d52/bots/cr665_KYCCopilotAssistant/webchat?__version__=2&enableFileAttachment=false"
+              title="KYC Copilot Assistant"
               style={{
-                flex: 1,
-                height: '36px',
-                padding: '0 12px',
-                fontSize: '12px',
-                border: '1px solid #D1D5DB',
-                borderRadius: '6px',
-                outline: 'none',
+                width: '100%',
+                height: '100%',
+                border: 0,
+                display: 'block',
               }}
+              allow="clipboard-read; clipboard-write; microphone"
             />
-            <button
-              onClick={() => handleSendMessage()}
-              style={{
-                backgroundColor: '#831B84',
-                color: '#FFFFFF',
-                border: 'none',
-                borderRadius: '6px',
-                width: '36px',
-                height: '36px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-              }}
-            >
-              <Send size={16} />
-            </button>
           </div>
         </div>
       )}

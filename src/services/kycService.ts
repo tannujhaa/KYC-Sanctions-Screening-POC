@@ -4,30 +4,98 @@ import type {
   AuditLogEntry,
   DashboardStats,
   DayScreeningStat,
+  ScreeningProgress,
+  CheckResult,
+  ReviewerDecision,
+  DocumentPayloadItem,
 } from '../types/kyc';
+import { getContext } from '@microsoft/power-apps/app';
+import { KYC_ScreenCustomerService } from '../generated/services/KYC_ScreenCustomerService';
+import { KYC_RecordDecisionService } from '../generated/services/KYC_RecordDecisionService';
+import { KYC_AuditLogService } from '../generated/services/KYC_AuditLogService';
+import type { KYC_AuditLogRead } from '../generated/models/KYC_AuditLogModel';
+import { KYC_CasesService } from '../generated/services/KYC_CasesService';
+import type { KYC_CasesRead } from '../generated/models/KYC_CasesModel';
+
+export async function getCurrentUserEmail(): Promise<string> {
+  try {
+    const context = await getContext();
+    if (context?.user?.userPrincipalName) {
+      return context.user.userPrincipalName;
+    }
+    if (context?.user?.fullName) {
+      return context.user.fullName;
+    }
+  } catch (err) {
+    console.warn('[Power Apps] getContext() unavailable or running outside Power Apps host:', err);
+  }
+  return 'demo.reviewer@xebia.com';
+}
+
+/**
+ * Normalizes any date value directly into strict YYYY-MM-DD format.
+ * Guarantees standard HTML5 date format (YYYY-MM-DD) without timezone shifts or month/day inversion.
+ */
+export function normalizeDobToYmd(val: string): string {
+  if (!val) return '';
+  const trimmed = val.trim();
+
+  // Already standard ISO YYYY-MM-DD (e.g. "1997-12-05" or "1997-12-05T00:00:00Z")
+  const ymdMatch = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/.exec(trimmed);
+  if (ymdMatch) {
+    const year = ymdMatch[1];
+    const month = ymdMatch[2].padStart(2, '0');
+    const day = ymdMatch[3].padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  // If provided as DD-MM-YYYY or DD/MM/YYYY (e.g. "05-12-1997")
+  const dmyMatch = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/.exec(trimmed);
+  if (dmyMatch) {
+    const day = dmyMatch[1].padStart(2, '0');
+    const month = dmyMatch[2].padStart(2, '0');
+    const year = dmyMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  return trimmed;
+}
 
 export interface IKycService {
   getCases(): Promise<KycCase[]>;
   getCaseById(caseId: string): Promise<KycCase | null>;
   getAuditLogs(caseId?: string): Promise<AuditLogEntry[]>;
   getSanctionsList(): Promise<SanctionsEntry[]>;
-  screenCustomer(customer: {
-    customerName: string;
-    dob: string;
-    nationality: string;
-    address: string;
-    documentNames?: string[];
-  }): Promise<{
+  screenCustomer(
+    customer: {
+      customerName: string;
+      dob: string;
+      nationality: string;
+      address: string;
+      documents?: DocumentPayloadItem[];
+      documentNames?: string[];
+    },
+    onProgress?: (progress: ScreeningProgress) => void
+  ): Promise<{
     caseId: string;
     checkResult: 'No Match' | 'Potential Match';
     matchedEntry?: string | null;
     matchReason?: string | null;
+    matchType?: string;
+    documentsLink?: string | null;
   }>;
   recordDecision(
     caseId: string,
     decision: 'Approved' | 'Rejected' | 'Escalated',
     comment: string,
-    reviewer: string
+    reviewer: string,
+    customerData?: {
+      customerName?: string;
+      dob?: string;
+      nationality?: string;
+      address?: string;
+      documents?: DocumentPayloadItem[];
+    }
   ): Promise<KycCase>;
   getDashboardStats(days?: number): Promise<DashboardStats>;
 }
@@ -788,19 +856,19 @@ const SEED_CASES: KycCase[] = [
   // 06 Nov 2026 (Fri) - 4 cases (1 potential, 3 cleared)
   {
     caseId: 'KYC-0007',
-    customerName: 'Elena Varga',
-    dob: '1990-02-14',
-    nationality: 'Hungarian',
-    address: 'Debrecen, Hungary',
+    customerName: 'Markus Thorn',
+    dob: '1971-08-22',
+    nationality: 'German',
+    address: '14 Harbour Lane, Eastmere',
     checkResult: 'Potential Match',
-    matchedEntry: 'Lena Varga (SANC-004)',
-    matchReason: "Matched alias 'Elena Varga' · DOB confirmed (1990-02-14)",
-    reviewerDecision: 'Rejected',
-    reviewerComment: 'Asset concealment risk confirmed.',
+    matchedEntry: 'Marcus Thorne',
+    matchReason: "Matched alias 'Markus Thorn' · DOB confirmed (1971-08-22)",
+    reviewerDecision: 'Escalated',
+    reviewerComment: 'Alias and DOB match; nationality differs. Route to L2 for enhanced due diligence.',
     reviewer: 'Demo Reviewer',
-    checkedOn: '2026-11-06T15:20:00Z',
-    decidedOn: '2026-11-06T15:45:00Z',
-    createdAt: '2026-11-06T15:20:00Z',
+    checkedOn: '2026-11-18T10:42:00Z',
+    decidedOn: '2026-11-18T10:45:00Z',
+    createdAt: '2026-11-18T10:42:00Z',
   },
   {
     caseId: 'KYC-0006',
@@ -905,6 +973,32 @@ const SEED_CASES: KycCase[] = [
 // Seed Audit Logs
 const SEED_AUDIT_LOGS: AuditLogEntry[] = [
   {
+    id: 'LOG-007-1',
+    caseId: 'KYC-0007',
+    event: 'Case Created',
+    details: 'Case created for markus thorn with 2 document(s).',
+    performedBy: 'reviewer@demo.local',
+    timestamp: '2026-11-18T10:42:05Z',
+  },
+  {
+    id: 'LOG-007-2',
+    caseId: 'KYC-0007',
+    event: 'Screening Completed',
+    details:
+      'Potential Match: Alias match (markus thorn is a listed alias of Marcus Thorne); DOB match (1971-08-22); Nationality differs (german vs british). Source: Mock Sanctions List.',
+    performedBy: 'System (screening flow)',
+    timestamp: '2026-11-18T10:42:09Z',
+  },
+  {
+    id: 'LOG-007-3',
+    caseId: 'KYC-0007',
+    event: 'Decision Recorded',
+    details:
+      'Escalated: Alias and DOB match; nationality differs. Route to L2 for enhanced due diligence.',
+    performedBy: 'reviewer@demo.local',
+    timestamp: '2026-11-18T10:45:31Z',
+  },
+  {
     id: 'LOG-001',
     caseId: 'KYC-0042',
     event: 'Case Created',
@@ -970,6 +1064,17 @@ export class MockKycService implements IKycService {
   private auditLogs: AuditLogEntry[] = [...SEED_AUDIT_LOGS];
   private sanctionsList: SanctionsEntry[] = [...MOCK_SANCTIONS_LIST];
 
+  addCaseDirectly(newCase: KycCase) {
+    const existingIdx = this.cases.findIndex(
+      (c) => c.caseId.toLowerCase() === newCase.caseId.toLowerCase()
+    );
+    if (existingIdx >= 0) {
+      this.cases[existingIdx] = newCase;
+    } else {
+      this.cases.unshift(newCase);
+    }
+  }
+
   async getCases(): Promise<KycCase[]> {
     return [...this.cases];
   }
@@ -990,21 +1095,53 @@ export class MockKycService implements IKycService {
     return [...this.sanctionsList];
   }
 
-  async screenCustomer(customer: {
-    customerName: string;
-    dob: string;
-    nationality: string;
-    address: string;
-    documentNames?: string[];
-  }): Promise<{
+  async screenCustomer(
+    customer: {
+      customerName: string;
+      dob: string;
+      nationality: string;
+      address: string;
+      documents?: DocumentPayloadItem[];
+      documentNames?: string[];
+    },
+    onProgress?: (progress: ScreeningProgress) => void
+  ): Promise<{
     caseId: string;
     checkResult: 'No Match' | 'Potential Match';
     matchedEntry?: string | null;
     matchReason?: string | null;
+    matchType?: string;
+    documentsLink?: string | null;
   }> {
+    const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const newCaseNumber = this.cases.length + 1;
     const caseId = `KYC-${String(newCaseNumber).padStart(4, '0')}`;
     const nowIso = new Date().toISOString();
+    const docCount = customer.documents?.length ?? customer.documentNames?.length ?? 0;
+    const resolvedDocNames =
+      customer.documentNames ||
+      (customer.documents ? customer.documents.map((d) => d.name) : []);
+
+    // Stage 1: Creating case
+    onProgress?.({ stage: 'creating_case' });
+    await delay(750);
+
+    this.auditLogs.unshift({
+      id: `LOG-${Date.now()}-1`,
+      caseId,
+      event: 'Case Created',
+      details: `Customer ${customer.customerName} submitted for screening with ${docCount} documents.`,
+      performedBy: 'System Intake',
+      timestamp: nowIso,
+    });
+
+    // Stage 2: Filing documents to case folder
+    onProgress?.({ stage: 'filing_documents', caseId });
+    await delay(850);
+
+    // Stage 3: Screening against Mock Sanctions List
+    onProgress?.({ stage: 'screening', caseId });
+    await delay(900);
 
     const screeningResult = screenAgainstSanctions(
       customer.customerName,
@@ -1012,6 +1149,14 @@ export class MockKycService implements IKycService {
       customer.nationality,
       this.sanctionsList
     );
+
+    const matchType = screeningResult.matchCriteria.matchedAlias
+      ? 'Alias Hit'
+      : screeningResult.matchCriteria.dobConfirmed
+        ? 'Direct Hit'
+        : screeningResult.matchCriteria.nationalityOnly
+          ? 'Nationality Match'
+          : 'None';
 
     const newCase: KycCase = {
       caseId,
@@ -1027,20 +1172,11 @@ export class MockKycService implements IKycService {
       checkedOn: nowIso,
       decidedOn: screeningResult.checkResult === 'No Match' ? nowIso : null,
       createdAt: nowIso,
-      documentNames: customer.documentNames || [],
+      documentNames: resolvedDocNames,
       documentsLink: `/documents/${caseId}`,
     };
 
     this.cases.unshift(newCase);
-
-    this.auditLogs.unshift({
-      id: `LOG-${Date.now()}-1`,
-      caseId,
-      event: 'Case Created',
-      details: `Customer ${customer.customerName} submitted for screening.`,
-      performedBy: 'System Intake',
-      timestamp: nowIso,
-    });
 
     this.auditLogs.unshift({
       id: `LOG-${Date.now()}-2`,
@@ -1051,11 +1187,19 @@ export class MockKycService implements IKycService {
       timestamp: nowIso,
     });
 
+    // Stage 4: Preparing result
+    onProgress?.({ stage: 'preparing_result', caseId });
+    await delay(600);
+
+    onProgress?.({ stage: 'completed', caseId });
+
     return {
       caseId,
       checkResult: screeningResult.checkResult,
       matchedEntry: screeningResult.matchedEntry,
       matchReason: screeningResult.matchReason,
+      matchType,
+      documentsLink: `/documents/${caseId}`,
     };
   }
 
@@ -1063,23 +1207,47 @@ export class MockKycService implements IKycService {
     caseId: string,
     decision: 'Approved' | 'Rejected' | 'Escalated',
     comment: string,
-    reviewer: string
+    reviewer: string,
+    _customerData?: {
+      customerName?: string;
+      dob?: string;
+      nationality?: string;
+      address?: string;
+      documents?: DocumentPayloadItem[];
+    }
   ): Promise<KycCase> {
     const idx = this.cases.findIndex((c) => c.caseId.toLowerCase() === caseId.toLowerCase());
-    if (idx === -1) {
-      throw new Error(`Case ${caseId} not found`);
-    }
-
     const nowIso = new Date().toISOString();
-    const updatedCase: KycCase = {
-      ...this.cases[idx],
-      reviewerDecision: decision,
-      reviewerComment: comment,
-      reviewer,
-      decidedOn: nowIso,
-    };
+    let updatedCase: KycCase;
 
-    this.cases[idx] = updatedCase;
+    if (idx !== -1) {
+      updatedCase = {
+        ...this.cases[idx],
+        reviewerDecision: decision,
+        reviewerComment: comment,
+        reviewer,
+        decidedOn: nowIso,
+      };
+      this.cases[idx] = updatedCase;
+    } else {
+      updatedCase = {
+        caseId,
+        customerName: _customerData?.customerName || 'Customer',
+        dob: _customerData?.dob || '',
+        nationality: _customerData?.nationality || '',
+        address: _customerData?.address || '',
+        checkResult: 'Potential Match',
+        reviewerDecision: decision,
+        reviewerComment: comment,
+        reviewer,
+        checkedOn: nowIso,
+        decidedOn: nowIso,
+        createdAt: nowIso,
+        documents: _customerData?.documents,
+        documentNames: _customerData?.documents?.map((d) => d.name) || [],
+      };
+      this.cases.unshift(updatedCase);
+    }
 
     this.auditLogs.unshift({
       id: `LOG-${Date.now()}-3`,
@@ -1100,136 +1268,202 @@ export class MockKycService implements IKycService {
    * and matchBasis {aliasHits, dobConfirmed, nationalityOnly} parsed from matchReason.
    */
   async getDashboardStats(days = 14): Promise<DashboardStats> {
-    const allCases = await this.getCases();
+    return calculateDashboardStats(this.cases, days);
+  }
+}
 
-    // Baseline reference: Wed 18 Nov 2026, 10:45 AM
-    const now = new Date('2026-11-18T10:45:00Z');
+export function calculateDashboardStats(allCases: KycCase[], days = 14): DashboardStats {
+  const now = new Date();
 
-    // 14 days window (Nov 5 to Nov 18, 2026)
-    const startDate = new Date(now);
-    startDate.setUTCDate(startDate.getUTCDate() - (days - 1));
-    startDate.setUTCHours(0, 0, 0, 0);
+  // Helper to parse case date cleanly
+  const getCaseDate = (c: KycCase): Date | null => {
+    const raw = c.createdAt || c.checkedOn;
+    if (!raw) return null;
+    const d = new Date(raw);
+    if (!isNaN(d.getTime())) return d;
+    const d2 = new Date(raw.replace(/,/g, ''));
+    if (!isNaN(d2.getTime())) return d2;
+    return null;
+  };
 
-    const filteredCases = allCases.filter((c) => {
-      const caseDate = new Date(c.createdAt);
-      return caseDate >= startDate && caseDate <= now;
+  const isSameCalendarDay = (d1: Date, d2: Date): boolean => {
+    return (
+      d1.getFullYear() === d2.getFullYear() &&
+      d1.getMonth() === d2.getMonth() &&
+      d1.getDate() === d2.getDate()
+    );
+  };
+
+  const isPotCase = (c: KycCase): boolean => {
+    if (c.checkResult === 'Potential Match') return true;
+    const rawEntry = (c.matchedEntry || '').trim().toLowerCase();
+    return Boolean(rawEntry && rawEntry !== 'none' && rawEntry !== 'null' && rawEntry !== '—' && rawEntry !== '-');
+  };
+
+  const total = allCases.length;
+  const potentialMatches = allCases.filter(isPotCase).length;
+  const cleared = total - potentialMatches;
+  const hitRate = total > 0 ? Math.round((potentialMatches / total) * 100) : 0;
+
+  const pendingCases = allCases.filter((c) => c.reviewerDecision === 'Pending review');
+  const pendingReview = pendingCases.length;
+
+  // Calculate oldest pending minutes
+  let oldestPendingMinutes = 0;
+  let oldestPendingCaseId: string | undefined = undefined;
+
+  if (pendingCases.length > 0) {
+    const sortedPending = [...pendingCases].sort((a, b) => {
+      const timeA = getCaseDate(a)?.getTime() || 0;
+      const timeB = getCaseDate(b)?.getTime() || 0;
+      return timeA - timeB;
     });
-
-    const total = filteredCases.length;
-    const potentialMatches = filteredCases.filter((c) => c.checkResult === 'Potential Match').length;
-    const cleared = total - potentialMatches;
-    const hitRate = total > 0 ? Math.round((potentialMatches / total) * 100) : 0;
-
-    const pendingCases = filteredCases.filter((c) => c.reviewerDecision === 'Pending review');
-    const pendingReview = pendingCases.length;
-
-    // Calculate oldest pending minutes
-    let oldestPendingMinutes = 0;
-    let oldestPendingCaseId: string | undefined = undefined;
-
-    if (pendingCases.length > 0) {
-      // Sort oldest first (smallest timestamp)
-      const sortedPending = [...pendingCases].sort(
-        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-      );
-      const oldest = sortedPending[0];
-      oldestPendingCaseId = oldest.caseId;
-      const oldestTime = new Date(oldest.createdAt).getTime();
+    const oldest = sortedPending[0];
+    oldestPendingCaseId = oldest.caseId;
+    const oldestTime = getCaseDate(oldest)?.getTime();
+    if (oldestTime) {
       const diffMs = Math.max(0, now.getTime() - oldestTime);
       oldestPendingMinutes = Math.floor(diffMs / (1000 * 60));
     }
-
-    // Today's stats (Nov 18, 2026)
-    const todayCases = filteredCases.filter((c) => {
-      const d = new Date(c.createdAt);
-      return (
-        d.getUTCFullYear() === now.getUTCFullYear() &&
-        d.getUTCMonth() === now.getUTCMonth() &&
-        d.getUTCDate() === now.getUTCDate()
-      );
-    });
-    const todayTotal = todayCases.length;
-    const todayPotential = todayCases.filter((c) => c.checkResult === 'Potential Match').length;
-
-    // Build day-by-day stats for the last 14 days
-    const perDay: DayScreeningStat[] = [];
-    for (let i = 0; i < days; i++) {
-      const targetDate = new Date(startDate);
-      targetDate.setUTCDate(startDate.getUTCDate() + i);
-
-      const dayNumber = targetDate.getUTCDate();
-      const isToday = i === days - 1;
-      const dayLabel = isToday ? 'Today' : String(dayNumber);
-
-      const targetIsoDate = targetDate.toISOString().split('T')[0];
-
-      const dayCases = filteredCases.filter((c) => {
-        const cDate = new Date(c.createdAt);
-        return (
-          cDate.getUTCFullYear() === targetDate.getUTCFullYear() &&
-          cDate.getUTCMonth() === targetDate.getUTCMonth() &&
-          cDate.getUTCDate() === targetDate.getUTCDate()
-        );
-      });
-
-      const dayTotal = dayCases.length;
-      const dayPotential = dayCases.filter((c) => c.checkResult === 'Potential Match').length;
-      const dayCleared = dayTotal - dayPotential;
-
-      perDay.push({
-        date: targetIsoDate,
-        dayNumber,
-        dayLabel,
-        total: dayTotal,
-        potential: dayPotential,
-        cleared: dayCleared,
-        isToday,
-      });
-    }
-
-    // Parse matchBasis {aliasHits, dobConfirmed, nationalityOnly} from matchReason
-    let aliasHits = 0;
-    let dobConfirmed = 0;
-    let nationalityOnly = 0;
-
-    for (const c of filteredCases) {
-      if (c.checkResult === 'Potential Match') {
-        const reason = c.matchReason || '';
-        const normReason = reason.toLowerCase();
-
-        if (normReason.includes('alias')) {
-          aliasHits++;
-        }
-
-        const hasDob = normReason.includes('dob');
-        const hasNat = normReason.includes('nationality');
-
-        if (hasDob) {
-          dobConfirmed++;
-        } else if (hasNat) {
-          nationalityOnly++;
-        }
-      }
-    }
-
-    return {
-      total,
-      potentialMatches,
-      hitRate,
-      cleared,
-      pendingReview,
-      oldestPendingMinutes,
-      oldestPendingCaseId,
-      todayTotal,
-      todayPotential,
-      perDay,
-      matchBasis: {
-        aliasHits,
-        dobConfirmed,
-        nationalityOnly,
-      },
-    };
   }
+
+  // Today's stats
+  const todayCases = allCases.filter((c) => {
+    const cDate = getCaseDate(c);
+    return cDate ? isSameCalendarDay(cDate, now) : false;
+  });
+  const todayTotal = todayCases.length;
+  const todayPotential = todayCases.filter(isPotCase).length;
+
+  // Build day-by-day stats for the last N days
+  const perDay: DayScreeningStat[] = [];
+  const startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1), 0, 0, 0, 0);
+
+  for (let i = 0; i < days; i++) {
+    const targetDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + i);
+    const dayNumber = targetDate.getDate();
+    const isToday = i === days - 1;
+    const dayLabel = isToday ? 'Today' : String(dayNumber);
+    const targetIsoDate = targetDate.toISOString().split('T')[0];
+
+    const dayCases = allCases.filter((c) => {
+      const cDate = getCaseDate(c);
+      return cDate ? isSameCalendarDay(cDate, targetDate) : false;
+    });
+
+    const dayTotal = dayCases.length;
+    const dayPotential = dayCases.filter(isPotCase).length;
+    const dayCleared = dayTotal - dayPotential;
+
+    perDay.push({
+      date: targetIsoDate,
+      dayNumber,
+      dayLabel,
+      total: dayTotal,
+      potential: dayPotential,
+      cleared: dayCleared,
+      isToday,
+    });
+  }
+
+  // Parse matchBasis {aliasHits, dobConfirmed, nationalityOnly} from matchReason
+  let aliasHits = 0;
+  let dobConfirmed = 0;
+  let nationalityOnly = 0;
+
+  for (const c of allCases) {
+    if (isPotCase(c)) {
+      const reason = (c.matchReason || '').toLowerCase();
+      if (reason.includes('alias')) aliasHits++;
+      const hasDob = reason.includes('dob');
+      const hasNat = reason.includes('nationality');
+      if (hasDob) dobConfirmed++;
+      else if (hasNat) nationalityOnly++;
+    }
+  }
+
+  return {
+    total,
+    potentialMatches,
+    hitRate,
+    cleared,
+    pendingReview,
+    oldestPendingMinutes,
+    oldestPendingCaseId,
+    todayTotal,
+    todayPotential,
+    perDay,
+    matchBasis: {
+      aliasHits,
+      dobConfirmed,
+      nationalityOnly,
+    },
+  };
+}
+
+export function mapKycCaseReadToKycCase(item: KYC_CasesRead): KycCase {
+  const caseId = item.Title || (item.ID ? `KYC-${String(item.ID).padStart(4, '0')}` : `KYC-${Date.now().toString().slice(-4)}`);
+  const rawResult =
+    (item.CheckResult as any)?.Value ||
+    (typeof item.CheckResult === 'string' ? item.CheckResult : '') ||
+    '';
+  const rawMatchedEntry = (item.MatchedEntry || '').trim();
+  const hasMatchedEntry = Boolean(
+    rawMatchedEntry &&
+    rawMatchedEntry.toLowerCase() !== 'none' &&
+    rawMatchedEntry.toLowerCase() !== 'null' &&
+    rawMatchedEntry.toLowerCase() !== '—' &&
+    rawMatchedEntry.toLowerCase() !== '-'
+  );
+  const rawReason = (item.MatchReason || '').toLowerCase();
+  const hasMatchReason = Boolean(
+    rawReason &&
+    !rawReason.includes('no match') &&
+    (rawReason.includes('matched') || rawReason.includes('hit') || rawReason.includes('sanction') || rawReason.includes('embargo') || rawReason.includes('flagged'))
+  );
+
+  const isPotMatch =
+    rawResult.toLowerCase().includes('potential') ||
+    (rawResult.toLowerCase().includes('match') && !rawResult.toLowerCase().includes('no')) ||
+    hasMatchedEntry ||
+    hasMatchReason;
+
+  const checkResult: CheckResult = isPotMatch ? 'Potential Match' : 'No Match';
+
+  let reviewerDecision: ReviewerDecision = 'Pending review';
+  if (item.ReviewerDecision) {
+    const rd = item.ReviewerDecision.toLowerCase();
+    if (rd.includes('approved') || rd === 'approve') reviewerDecision = 'Approved';
+    else if (rd.includes('rejected') || rd === 'reject') reviewerDecision = 'Rejected';
+    else if (rd.includes('escalated') || rd === 'escalate') reviewerDecision = 'Escalated';
+  }
+
+  const reviewer =
+    item.Reviewer?.DisplayName ||
+    item.Reviewer?.Email ||
+    item.Author?.DisplayName ||
+    item.Author?.Email ||
+    item['Reviewer#Claims'] ||
+    null;
+
+  return {
+    caseId,
+    customerName: item.CustomerName || item.Title || 'Unknown Customer',
+    dob: item.DOB || '',
+    nationality: item.Nationality || '',
+    address: item.Address || '',
+    checkResult,
+    matchedEntry: item.MatchedEntry || null,
+    matchReason: item.MatchReason || null,
+    reviewerDecision,
+    reviewerComment: item.ReviewerComment || null,
+    reviewer,
+    checkedOn: item.CheckedOn || item.Created || new Date().toISOString(),
+    decidedOn: item.DecidedOn || null,
+    documentsLink: item.DocumentsLink || `/documents/${caseId}`,
+    documentNames: [],
+    createdAt: item.Created || item.CheckedOn || new Date().toISOString(),
+  };
 }
 
 /**
@@ -1238,16 +1472,100 @@ export class MockKycService implements IKycService {
 export class PowerKycService implements IKycService {
   private mockFallback = new MockKycService();
 
+  addCaseDirectly(newCase: KycCase) {
+    this.mockFallback.addCaseDirectly(newCase);
+  }
+
   async getCases(): Promise<KycCase[]> {
-    // Falls back to mock or calls Power Apps connector when running in Power Apps container
+    try {
+      console.log('[SharePoint] Fetching live cases from KYC_Cases via KYC_CasesService.getAll()...');
+      const response = await KYC_CasesService.getAll();
+      console.log('[SharePoint] KYC_CasesService.getAll() response:', response);
+
+      const items: KYC_CasesRead[] = Array.isArray(response?.data)
+        ? response.data
+        : Array.isArray((response?.data as any)?.value)
+        ? (response.data as any).value
+        : [];
+
+      if (response && (response.success || items.length > 0)) {
+        console.log(`[SharePoint] Retrieved ${items.length} live cases from KYC_Cases SharePoint list.`);
+        const liveCases = items.map(mapKycCaseReadToKycCase);
+        // Sort newest first by Created or CheckedOn
+        liveCases.sort((a, b) => new Date(b.createdAt || b.checkedOn).getTime() - new Date(a.createdAt || a.checkedOn).getTime());
+        return liveCases;
+      }
+    } catch (spErr) {
+      console.warn('[SharePoint] Live KYC_CasesService fetch failed or running standalone, falling back to mock cases:', spErr);
+    }
     return this.mockFallback.getCases();
   }
 
   async getCaseById(caseId: string): Promise<KycCase | null> {
+    try {
+      const all = await this.getCases();
+      const match = all.find((c) => c.caseId.toLowerCase() === caseId.toLowerCase());
+      if (match) return match;
+    } catch (err) {
+      console.warn('[SharePoint] Live getCaseById failed, falling back to mock:', err);
+    }
     return this.mockFallback.getCaseById(caseId);
   }
 
   async getAuditLogs(caseId?: string): Promise<AuditLogEntry[]> {
+    try {
+      console.log(`[SharePoint] Fetching live audit logs from KYC_AuditLog list via KYC_AuditLogService.getAll()...`);
+      const response = await KYC_AuditLogService.getAll();
+      console.log('[SharePoint] KYC_AuditLogService.getAll() response:', response);
+
+      const items: KYC_AuditLogRead[] = Array.isArray(response?.data)
+        ? response.data
+        : Array.isArray((response?.data as any)?.value)
+        ? (response.data as any).value
+        : [];
+
+      if (response && (response.success || items.length > 0)) {
+        console.log(`[SharePoint] Successfully retrieved ${items.length} audit logs from SharePoint.`);
+        const mappedLogs: AuditLogEntry[] = items.map((item: KYC_AuditLogRead) => {
+          const performedBy =
+            item.PerformedBy?.DisplayName ||
+            item.PerformedBy?.Email ||
+            item.Author?.DisplayName ||
+            item.Author?.Email ||
+            item['PerformedBy#Claims'] ||
+            'System';
+
+          const resolvedCaseId = (item.CaseID || (item.Title?.startsWith('KYC-') ? item.Title : '') || '').trim();
+          let event = item.Title || 'Audit Log';
+          if (event.startsWith('KYC-')) {
+            event = item.ReviewerDecision ? 'Decision Recorded' : 'Screening Completed';
+          }
+
+          return {
+            id: String(item.ID || Math.random()),
+            caseId: resolvedCaseId,
+            event: event as any,
+            details: item.Details || item.ReviewerComments || 'Action recorded.',
+            performedBy,
+            timestamp: item.Timestamp || item.Created || new Date().toISOString(),
+          };
+        });
+
+        mappedLogs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+        if (caseId) {
+          const cid = caseId.toLowerCase();
+          const filtered = mappedLogs.filter(
+            (l) => l.caseId.toLowerCase() === cid || (l.details && l.details.toLowerCase().includes(cid))
+          );
+          return filtered;
+        }
+
+        return mappedLogs;
+      }
+    } catch (spErr) {
+      console.warn('[SharePoint] Live KYC_AuditLogService fetch failed or running standalone, falling back to local audit logs:', spErr);
+    }
     return this.mockFallback.getAuditLogs(caseId);
   }
 
@@ -1255,31 +1573,255 @@ export class PowerKycService implements IKycService {
     return this.mockFallback.getSanctionsList();
   }
 
-  async screenCustomer(customer: {
-    customerName: string;
-    dob: string;
-    nationality: string;
-    address: string;
-    documentNames?: string[];
-  }) {
-    return this.mockFallback.screenCustomer(customer);
+  async screenCustomer(
+    customer: {
+      customerName: string;
+      dob: string;
+      nationality: string;
+      address: string;
+      documents?: DocumentPayloadItem[];
+      documentNames?: string[];
+    },
+    onProgress?: (progress: ScreeningProgress) => void
+  ) {
+    console.log('[Power Automate] Initiating screening flow execution for:', customer.customerName);
+    onProgress?.({ stage: 'creating_case' });
+    const resolvedDocNames =
+      customer.documentNames ||
+      (customer.documents ? customer.documents.map((d) => d.name) : []);
+
+    try {
+      // Document JSON payload matching Power Automate Parse JSON action:
+      // Exact structure: Array of { name: string, contentBytes: string }
+      // If no documents are attached, send empty array []
+      const docPayload: DocumentPayloadItem[] = (customer.documents || []).map((doc) => ({
+        name: doc.name,
+        contentBytes: doc.contentBytes,
+      }));
+      const docJson = JSON.stringify(docPayload);
+
+      console.log(
+        `[Power Automate] Prepared DocumentsJson payload (${docPayload.length} documents):`,
+        docPayload.map((d) => ({ name: d.name, base64Length: d.contentBytes?.length || 0 }))
+      );
+
+      const userEmail = await getCurrentUserEmail();
+      console.log(`[Power Automate] Calling KYC_ScreenCustomerService.Run with PerformedByEmail (${userEmail})...`);
+      const flowPromise = KYC_ScreenCustomerService.Run({
+        text: customer.customerName,
+        text_1: customer.dob,
+        text_2: customer.nationality,
+        text_3: customer.address,
+        text_4: docJson,
+        text_5: userEmail,
+        text_6: '',
+        text_7: '',
+      });
+
+      // Visual progress transition for stage 1 & 2 while flow executes
+      await new Promise((r) => setTimeout(r, 700));
+      onProgress?.({ stage: 'filing_documents' });
+
+      const flowResult = await flowPromise;
+      console.log('[Power Automate] Flow response received:', flowResult);
+
+      onProgress?.({ stage: 'screening' });
+      await new Promise((r) => setTimeout(r, 700));
+
+      onProgress?.({ stage: 'preparing_result' });
+      await new Promise((r) => setTimeout(r, 400));
+
+      if (flowResult && flowResult.data) {
+        const data = flowResult.data;
+        const caseId = data.caseid || `KYC-${Date.now().toString().slice(-4)}`;
+        const checkResult = (data.checkresult as CheckResult) || 'Potential Match';
+        const matchedEntry = data.matchedentry || null;
+        const matchReason = data.matchreason || null;
+        const matchType = data.matchtype || 'Screening Complete';
+        const documentsLink = data.documentslink || `/documents/${caseId}`;
+
+        const newCase: KycCase = {
+          caseId,
+          customerName: customer.customerName,
+          dob: customer.dob,
+          nationality: customer.nationality,
+          address: customer.address,
+          checkResult,
+          matchedEntry,
+          matchReason,
+          reviewerDecision: 'Pending review',
+          checkedOn: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          documentNames: resolvedDocNames,
+          documents: customer.documents,
+          documentsLink,
+        };
+
+        this.mockFallback.addCaseDirectly(newCase);
+        onProgress?.({ stage: 'completed', caseId });
+
+        return {
+          caseId,
+          checkResult,
+          matchedEntry,
+          matchReason,
+          matchType,
+          documentsLink,
+        };
+      }
+    } catch (flowErr) {
+      console.warn('[Power Automate] Live flow execution failed or running standalone, falling back to mock screening:', flowErr);
+    }
+
+    return this.mockFallback.screenCustomer(customer, onProgress);
   }
 
   async recordDecision(
     caseId: string,
     decision: 'Approved' | 'Rejected' | 'Escalated',
     comment: string,
-    reviewer: string
+    reviewer: string,
+    customerData?: {
+      customerName?: string;
+      dob?: string;
+      nationality?: string;
+      address?: string;
+      documents?: DocumentPayloadItem[];
+    }
   ): Promise<KycCase> {
-    return this.mockFallback.recordDecision(caseId, decision, comment, reviewer);
+    const userEmail = await getCurrentUserEmail();
+    const reviewerEmail = userEmail || reviewer;
+
+    console.log(`[Power Automate] Recording reviewer decision:`, {
+      caseId,
+      decision,
+      comment,
+      reviewer: reviewerEmail,
+    });
+
+    // 1. Flow: KYC - Record Decision (KYC_RecordDecisionService.Run)
+    // Parameter Schema:
+    // text: CaseID (title of KYC Cases, e.g. "KYC-20261118-194444")
+    // text_1: ReviewerDecision ("Approved" | "Rejected" | "Escalated")
+    // text_2: ReviewerComment (reviewer comment)
+    // text_3: ReviewerEmail (logged-in user email)
+    let flowCreatedAudit = false;
+    try {
+      const payload: any = {
+        text: caseId,
+        text_1: decision,
+        text_2: comment,
+        text_3: reviewerEmail,
+        // Named parameter aliases for Power Automate triggers
+        CaseID: caseId,
+        ReviewerDecision: decision,
+        ReviewerDec: decision,
+        ReviewerComment: comment,
+        ReviewerCom: comment,
+        ReviewerEmail: reviewerEmail,
+        ReviewerEma: reviewerEmail,
+      };
+
+      console.log(`[Power Automate] Invoking KYC_RecordDecisionService.Run with:`, payload);
+      const recordResult = await KYC_RecordDecisionService.Run(payload);
+      console.log('[Power Automate] KYC_RecordDecisionService.Run response:', recordResult);
+      if (recordResult) {
+        flowCreatedAudit = true;
+      }
+    } catch (recordErr) {
+      console.warn('[Power Automate] KYC_RecordDecisionService execution failed or running standalone:', recordErr);
+    }
+
+    // 2. Direct SharePoint update to KYC_Cases to ensure ReviewerComment & Decision are saved
+    // CRITICAL: Preserve CheckResult so SharePoint never resets a Potential Match to No Match upon decision recording!
+    let preservedCheckResult: CheckResult = 'Potential Match';
+    let matchedCaseRead: KYC_CasesRead | undefined;
+    try {
+      const casesRes = await KYC_CasesService.getAll();
+      const items: KYC_CasesRead[] = Array.isArray(casesRes?.data) ? casesRes.data : [];
+      const match = items.find((it) => (it.Title || '').toLowerCase() === caseId.toLowerCase());
+      if (match && match.ID) {
+        matchedCaseRead = match;
+        const rawResult =
+          (match.CheckResult as any)?.Value ||
+          (typeof match.CheckResult === 'string' ? match.CheckResult : '') ||
+          '';
+        const rawMatchedEntry = (match.MatchedEntry || '').trim();
+        const hasMatchedEntry = Boolean(
+          rawMatchedEntry &&
+          rawMatchedEntry.toLowerCase() !== 'none' &&
+          rawMatchedEntry.toLowerCase() !== 'null' &&
+          rawMatchedEntry.toLowerCase() !== '—' &&
+          rawMatchedEntry.toLowerCase() !== '-'
+        );
+        const rawReason = (match.MatchReason || '').toLowerCase();
+        const hasMatchReason = Boolean(
+          rawReason &&
+          !rawReason.includes('no match') &&
+          (rawReason.includes('matched') || rawReason.includes('hit') || rawReason.includes('sanction') || rawReason.includes('embargo') || rawReason.includes('flagged'))
+        );
+
+        const isPotMatch =
+          rawResult.toLowerCase().includes('potential') ||
+          (rawResult.toLowerCase().includes('match') && !rawResult.toLowerCase().includes('no')) ||
+          hasMatchedEntry ||
+          hasMatchReason;
+
+        preservedCheckResult = isPotMatch ? 'Potential Match' : 'No Match';
+
+        console.log(`[SharePoint] Updating live KYC_Cases ID ${match.ID} with decision: ${decision}, comment: ${comment}, CheckResult: ${preservedCheckResult}`);
+        await KYC_CasesService.update(String(match.ID), {
+          CheckResult: preservedCheckResult,
+          ReviewerDecision: decision,
+          ReviewerComment: comment,
+          DecidedOn: new Date().toISOString(),
+        });
+      }
+    } catch (spCasesErr) {
+      console.warn('[SharePoint] Direct KYC_Cases update notice:', spCasesErr);
+    }
+
+    // 3. Fallback only: If flow didn't run or failed, write directly to KYC_AuditLog
+    // (Prevents creating duplicate audit log entries when the Power Automate flow already creates one)
+    if (!flowCreatedAudit) {
+      try {
+        console.log(`[SharePoint] Flow did not run; creating fallback live audit log entry for case ${caseId}...`);
+        await KYC_AuditLogService.create({
+          Title: 'Decision Recorded',
+          CaseID: caseId,
+          ReviewerDecision: decision,
+          ReviewerComments: comment,
+          Details: `Reviewer decision: ${decision}. Comment: ${comment || 'Decision recorded by reviewer.'}`,
+          Timestamp: new Date().toISOString(),
+        });
+      } catch (spAuditErr) {
+        console.warn('[SharePoint] Fallback KYC_AuditLog creation notice:', spAuditErr);
+      }
+    }
+
+    const fallbackCase = await this.mockFallback.recordDecision(caseId, decision, comment, reviewer, customerData);
+    if (matchedCaseRead) {
+      const mapped = mapKycCaseReadToKycCase(matchedCaseRead);
+      return {
+        ...mapped,
+        checkResult: preservedCheckResult,
+        reviewerDecision: decision,
+        reviewerComment: comment,
+        reviewer: reviewerEmail,
+        decidedOn: new Date().toISOString(),
+      };
+    }
+    fallbackCase.checkResult = preservedCheckResult;
+    return fallbackCase;
   }
 
   async getDashboardStats(days = 14): Promise<DashboardStats> {
-    return this.mockFallback.getDashboardStats(days);
+    const allCases = await this.getCases();
+    return calculateDashboardStats(allCases, days);
   }
 }
 
-// Singleton instances
+// Singleton instances - active KYC Service is PowerKycService (which calls KYC_ScreenCustomerService.Run)
 export const mockKycService = new MockKycService();
 export const powerKycService = new PowerKycService();
-export const kycService: IKycService = mockKycService;
+export const kycService: IKycService = powerKycService;

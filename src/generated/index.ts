@@ -4,9 +4,16 @@
  */
 
 // Models
+export * as CommonModels from './models/CommonModels';
+export * as KYC_AuditLogModel from './models/KYC_AuditLogModel';
+export * as KYC_CasesModel from './models/KYC_CasesModel';
 export * as KYC_RecordDecisionModel from './models/KYC_RecordDecisionModel';
 export * as KYC_ScreenCustomerModel from './models/KYC_ScreenCustomerModel';
+export * as MicrosoftCopilotStudioModel from './models/MicrosoftCopilotStudioModel';
 
 // Services
+export * from './services/KYC_AuditLogService';
+export * from './services/KYC_CasesService';
 export * from './services/KYC_RecordDecisionService';
 export * from './services/KYC_ScreenCustomerService';
+export * from './services/MicrosoftCopilotStudioService';

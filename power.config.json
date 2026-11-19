@@ -13,7 +13,23 @@
   "connectionReferences": {
     "dda0832c-55c6-40c9-9932-52434218cd27": {
       "id": "/providers/microsoft.powerapps/apis/shared_sharepointonline",
-      "displayName": "SharePoint"
+      "displayName": "SharePoint",
+      "dataSources": [
+        "kyc_auditlog",
+        "kyc_cases"
+      ],
+      "dataSets": {
+        "https://xebiagroup.sharepoint.com/sites/QA": {
+          "dataSources": {
+            "kyc_auditlog": {
+              "tableName": "KYC_AuditLog"
+            },
+            "kyc_cases": {
+              "tableName": "KYC_Cases"
+            }
+          }
+        }
+      }
     },
     "6480195b-9004-48f2-a46c-a45c2c2e29b3": {
       "id": "/providers/Microsoft.PowerApps/apis/shared_logicflows",
@@ -44,6 +60,14 @@
           "shared_sharepointonline": "dda0832c-55c6-40c9-9932-52434218cd27"
         }
       }
+    },
+    "daf99b61-798a-4bcd-86ff-d9fa21585122": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_microsoftcopilotstudio",
+      "displayName": "Microsoft Copilot Studio",
+      "dataSources": [
+        "microsoftcopilotstudio"
+      ],
+      "dataSets": {}
     }
   },
   "databaseReferences": {}

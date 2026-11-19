@@ -20,8 +20,22 @@ export const StackedBarChart: React.FC<StackedBarChartProps> = ({
 
   const yTicks = [maxScale, Math.round((maxScale * 2) / 3), Math.round(maxScale / 3), 0];
 
-  const dateRangeLabel =
-    data.length > 0 ? `${data[0].dayNumber}–${data[data.length - 1].dayNumber} Nov` : 'Last 14 days';
+  const dateRangeLabel = (() => {
+    if (!data || data.length === 0) return 'Last 14 days';
+    const first = data[0];
+    const last = data[data.length - 1];
+    const firstDate = new Date(first.date);
+    const lastDate = new Date(last.date);
+    if (!isNaN(firstDate.getTime()) && !isNaN(lastDate.getTime())) {
+      const firstMonth = firstDate.toLocaleString('en-US', { month: 'short' });
+      const lastMonth = lastDate.toLocaleString('en-US', { month: 'short' });
+      if (firstMonth === lastMonth) {
+        return `${first.dayNumber}–${last.dayNumber} ${lastMonth}`;
+      }
+      return `${first.dayNumber} ${firstMonth}–${last.dayNumber} ${lastMonth}`;
+    }
+    return `${first.dayNumber}–${last.dayNumber}`;
+  })();
 
   const ariaSummary = `Screenings per day: ${totalScreenings} screenings, ${totalPotential} potential matches across ${data.length} days from ${dateRangeLabel}.`;
 
