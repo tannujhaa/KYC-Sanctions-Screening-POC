@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   Shield,
   History,
@@ -13,10 +13,12 @@ import {
 } from 'lucide-react';
 import { kycService, getCurrentUserEmail, normalizeDobToYmd, MOCK_SANCTIONS_LIST } from '../services/kycService';
 import type { KycCase } from '../types/kyc';
+import { DocumentValidationSection } from '../components/screening/DocumentValidationSection';
 
 export const ScreeningResultPage: React.FC = () => {
   const { caseId } = useParams<{ caseId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [caseData, setCaseData] = useState<KycCase | null>(null);
   const [selectedDecision, setSelectedDecision] = useState<'Approved' | 'Rejected' | 'Escalated'>('Approved');
@@ -36,7 +38,19 @@ export const ScreeningResultPage: React.FC = () => {
       }
 
       if (caseId) {
-        const found = await kycService.getCaseById(caseId);
+        let found = await kycService.getCaseById(caseId);
+        const stateResult = (location.state as any)?.screeningResult;
+        if (!found && stateResult && stateResult.caseId === caseId) {
+          found = stateResult as KycCase;
+        } else if (found && stateResult && stateResult.caseId === caseId) {
+          if (stateResult.documentValidationStatus && !found.documentValidationStatus) {
+            found.documentValidationStatus = stateResult.documentValidationStatus;
+          }
+          if (stateResult.documentValidationDetails && !found.documentValidationDetails) {
+            found.documentValidationDetails = stateResult.documentValidationDetails;
+          }
+        }
+
         if (found) {
           setCaseData(found);
           const hasMatched = Boolean(
@@ -825,6 +839,20 @@ export const ScreeningResultPage: React.FC = () => {
         </div>
       )}
 
+      {/* 4. Document Validation Results Section */}
+      <DocumentValidationSection
+        status={caseData?.documentValidationStatus}
+        details={caseData?.documentValidationDetails}
+        validationDate={caseData?.documentValidationDate}
+        customerData={{
+          name: customer.name,
+          dob: customer.dob,
+          nationality: customer.nationality,
+          address: customer.address,
+        }}
+        fallbackDocumentNames={caseData?.documentNames}
+      />
+
       {/* 5. Row 4: Reviewer Decision Card (Available for BOTH Green and Red until recorded) */}
       <div
         style={{
@@ -1033,7 +1061,7 @@ export const ScreeningResultPage: React.FC = () => {
               />
             </div>
 
-            {/* Record Decision Button */}
+            {/* Submit Decision Button */}
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <button
                 type="button"
@@ -1062,7 +1090,7 @@ export const ScreeningResultPage: React.FC = () => {
                   if (!savingDecision) e.currentTarget.style.backgroundColor = '#831B84';
                 }}
               >
-                {savingDecision ? 'Recording decision...' : 'Record decision'}
+                {savingDecision ? 'Submitting decision...' : 'Submit Decision'}
               </button>
             </div>
           </div>

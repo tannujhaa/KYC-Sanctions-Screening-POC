@@ -24,6 +24,59 @@ export interface SanctionsEntry {
 
 export type CheckResult = 'No Match' | 'Potential Match';
 export type ReviewerDecision = 'Pending review' | 'Approved' | 'Rejected' | 'Escalated';
+export type DocumentValidationStatus = 'Pass' | 'Fail' | 'Needs Review';
+
+export interface DocumentItemValidation {
+  name?: string;
+  fileName?: string;
+  documentName?: string;
+  type?: string;
+  documentType?: string;
+  status?: string; // 'Pass' | 'Fail' | 'Needs Review'
+  validationStatus?: string;
+  remarks?: string;
+  confidence?: number;
+  extractedFields?: Record<string, any>;
+}
+
+export interface CustomerFieldValidation {
+  field?: string;
+  submittedValue?: string;
+  extractedValue?: string;
+  status?: string; // 'Pass' | 'Fail' | 'Needs Review' | 'Match' | 'Mismatch'
+  explanation?: string;
+  expected?: string;
+  extracted?: string;
+  remarks?: string;
+}
+
+export interface CustomerDataValidation {
+  fullName?: CustomerFieldValidation | string | any;
+  dob?: CustomerFieldValidation | string | any;
+  nationality?: CustomerFieldValidation | string | any;
+  address?: CustomerFieldValidation | string | any;
+  fields?: CustomerFieldValidation[];
+  status?: string;
+  remarks?: string;
+  [key: string]: any;
+}
+
+export interface CrossDocumentValidation {
+  status?: string;
+  remarks?: string;
+  details?: string;
+  checks?: string[] | any[];
+  [key: string]: any;
+}
+
+export interface DocumentValidationDetails {
+  documents?: DocumentItemValidation[];
+  crossDocumentValidation?: CrossDocumentValidation | string;
+  customerDataValidation?: CustomerDataValidation | CustomerFieldValidation[];
+  overallValidationStatus?: string;
+  overallRemarks?: string;
+  [key: string]: any;
+}
 
 export type ScreeningStage =
   | 'creating_case'
@@ -56,6 +109,9 @@ export interface KycCase {
   documentsLink?: string | null;
   documentNames?: string[];
   documents?: DocumentPayloadItem[];
+  documentValidationStatus?: DocumentValidationStatus | string | null;
+  documentValidationDetails?: DocumentValidationDetails | string | null;
+  documentValidationDate?: string | null;
   createdAt: string; // ISO format or date string
 }
 

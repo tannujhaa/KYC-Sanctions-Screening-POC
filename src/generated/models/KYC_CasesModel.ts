@@ -65,6 +65,9 @@ export interface KYC_CasesBase {
   NameMatch?: boolean;
   DOBMatch?: boolean;
   NationalityMatch?: boolean;
+  DocumentValidationStatus?: string;
+  DocumentValidationDetails?: string;
+  DocumentValidationDate?: string;
   OData__ColorTag?: string;
   ComplianceAssetId?: string;
   Modified?: string;

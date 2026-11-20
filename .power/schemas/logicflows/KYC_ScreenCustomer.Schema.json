@@ -115,20 +115,6 @@
               "type": "string",
               "x-ms-content-hint": "TEXT",
               "x-ms-dynamically-added": true
-            },
-            "text_6": {
-              "description": "Please enter your input",
-              "title": "ReviewerDecision",
-              "type": "string",
-              "x-ms-content-hint": "TEXT",
-              "x-ms-dynamically-added": true
-            },
-            "text_7": {
-              "description": "Please enter your input",
-              "title": "reviewercomments",
-              "type": "string",
-              "x-ms-content-hint": "TEXT",
-              "x-ms-dynamically-added": true
             }
           },
           "required": [
@@ -175,6 +161,18 @@
             },
             "documentslink": {
               "title": "DocumentsLink",
+              "type": "string",
+              "x-ms-content-hint": "TEXT",
+              "x-ms-dynamically-added": true
+            },
+            "documentvalidationstatus": {
+              "title": "DocumentValidationStatus",
+              "type": "string",
+              "x-ms-content-hint": "TEXT",
+              "x-ms-dynamically-added": true
+            },
+            "documentvalidationdetails": {
+              "title": "DocumentValidationDetails",
               "type": "string",
               "x-ms-content-hint": "TEXT",
               "x-ms-dynamically-added": true

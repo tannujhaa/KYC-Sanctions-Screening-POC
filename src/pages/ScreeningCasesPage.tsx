@@ -8,7 +8,7 @@ import {
   History,
   RotateCcw,
 } from 'lucide-react';
-import { kycService } from '../services/kycService';
+import { kycService, parseDocumentValidationDetails } from '../services/kycService';
 import { KYC_CasesService } from '../generated/services/KYC_CasesService';
 import type { KYC_CasesRead } from '../generated/models/KYC_CasesModel';
 import type { KycCase, CheckResult, ReviewerDecision } from '../types/kyc';
@@ -81,6 +81,34 @@ function mapSharePointCase(item: KYC_CasesRead): KycCase {
     item['Reviewer#Claims'] ||
     null;
 
+  const rawDocStatus =
+    (item as any).DocumentValidationStatus ||
+    (item as any).DocumentStatus ||
+    (item as any)['Document status'] ||
+    (item as any)['Document_x0020_status'] ||
+    (item as any)['Document_x0020_Status'] ||
+    null;
+
+  const rawDocDetails =
+    (item as any).DocumentValidationDetails ||
+    (item as any).Validation ||
+    (item as any)['validation'] ||
+    (item as any)['Validation'] ||
+    (item as any)['Validation Details'] ||
+    (item as any)['ValidationDetails'] ||
+    null;
+
+  const rawDocDate =
+    (item as any).DocumentValidationDate ||
+    (item as any).DatetimeOfValidation ||
+    (item as any)['datetime of validaton'] ||
+    (item as any)['Datetime of validation'] ||
+    (item as any)['Datetime_x0020_of_x0020_validaton'] ||
+    null;
+
+  const parsedDocDetails = parseDocumentValidationDetails(rawDocDetails);
+  const docStatus = (rawDocStatus || parsedDocDetails?.overallValidationStatus || null) as any;
+
   return {
     caseId,
     customerName: item.CustomerName || item.Title || 'Unknown Customer',
@@ -97,6 +125,9 @@ function mapSharePointCase(item: KYC_CasesRead): KycCase {
     decidedOn: item.DecidedOn || null,
     documentsLink: item.DocumentsLink || `/documents/${caseId}`,
     documentNames: [],
+    documentValidationStatus: docStatus,
+    documentValidationDetails: parsedDocDetails,
+    documentValidationDate: rawDocDate,
     createdAt: item.Created || item.CheckedOn || new Date().toISOString(),
   };
 }

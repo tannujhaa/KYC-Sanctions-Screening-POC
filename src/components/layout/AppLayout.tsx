@@ -197,13 +197,13 @@ export const AppLayout: React.FC = () => {
               <span>New Case</span>
             </NavLink>
 
-            {/* 3. Screening Cases (with badge) */}
+            {/* 3. Screening Cases */}
             <NavLink
               to="/cases"
               style={({ isActive }) => ({
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'space-between',
+                gap: '10px',
                 padding: '9px 12px',
                 borderRadius: '8px',
                 fontSize: '13px',
@@ -214,24 +214,8 @@ export const AppLayout: React.FC = () => {
                 transition: 'all 0.15s ease',
               })}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Files size={18} />
-                <span>Cases</span>
-              </div>
-              {pendingCount > 0 && (
-                <span
-                  style={{
-                    backgroundColor: '#FDE7E9',
-                    color: '#D13438',
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    padding: '1px 7px',
-                    borderRadius: '9999px',
-                  }}
-                >
-                  {pendingCount}
-                </span>
-              )}
+              <Files size={18} />
+              <span>Cases</span>
             </NavLink>
 
             {/* 4. Audit Trail */}
@@ -438,7 +422,14 @@ export const AppLayout: React.FC = () => {
       {/* FLOATING CHATBOT AGENT BUTTON (Available on all pages) */}
       <button
         type="button"
-        onClick={() => setIsCopilotOpen((prev) => !prev)}
+        onClick={() => {
+          setIsCopilotOpen((prev) => {
+            if (!prev) {
+              setIframeKey((k) => k + 1);
+            }
+            return !prev;
+          });
+        }}
         title={isCopilotOpen ? 'Close KYC assistant panel' : 'Chat with KYC Copilot Assistant'}
         style={{
           position: 'fixed',
@@ -615,7 +606,7 @@ export const AppLayout: React.FC = () => {
             </div>
           </div>
 
-          {/* Copilot Studio Live WebChat Iframe */}
+          {/* Copilot Studio Live WebChat Iframe (default teal header masked via overflow clipping) */}
           <div
             style={{
               flex: 1,
@@ -630,9 +621,13 @@ export const AppLayout: React.FC = () => {
               key={iframeKey}
               src="https://copilotstudio.microsoft.com/environments/d342b729-49aa-ebca-8ede-9a148dc57d52/bots/cr665_KYCCopilotAssistant/webchat?__version__=2&enableFileAttachment=false"
               title="KYC Copilot Assistant"
+              frameBorder="0"
               style={{
+                position: 'absolute',
+                top: '-50px',
+                left: 0,
                 width: '100%',
-                height: '100%',
+                height: 'calc(100% + 50px)',
                 border: 0,
                 display: 'block',
               }}

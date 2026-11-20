@@ -308,7 +308,7 @@ export const NewScreeningPage: React.FC = () => {
       setTimeout(() => {
         setIsModalOpen(false);
         setIsSubmitting(false);
-        navigate(`/result/${result.caseId}`);
+        navigate(`/result/${result.caseId}`, { state: { screeningResult: result } });
       }, 500);
     } catch (err: any) {
       console.error('[NewScreeningPage] Screening failed:', err);
@@ -371,6 +371,52 @@ export const NewScreeningPage: React.FC = () => {
           Enter customer details and attach supporting documents to run a sanctions check.
         </p>
       </div>
+
+      {/* Flow Execution Failure Alert Banner */}
+      {modalError && !isModalOpen && (
+        <div
+          style={{
+            backgroundColor: '#FEF2F2',
+            border: '1px solid #FCA5A5',
+            borderRadius: '8px',
+            padding: '12px 16px',
+            color: '#B91C1C',
+            fontSize: '13px',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <AlertCircle size={18} color="#DC2626" />
+            <div>
+              <strong style={{ display: 'block', fontSize: '13px', marginBottom: '2px' }}>
+                Screening Flow Failed
+              </strong>
+              <span style={{ fontSize: '12px', color: '#991B1B' }}>{modalError}</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleRetryScreening}
+            style={{
+              backgroundColor: '#DC2626',
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: '6px',
+              padding: '6px 14px',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Retry flow
+          </button>
+        </div>
+      )}
 
       {/* Global Validation Banner if form has errors */}
       {hasErrors && (
@@ -695,12 +741,12 @@ export const NewScreeningPage: React.FC = () => {
             </h2>
             <p
               style={{
-                margin: '0 0 16px 0',
+                margin: '0 0 14px 0',
                 fontSize: '12px',
                 color: '#6B7280',
               }}
             >
-              Filed to the case folder when the check runs.
+              Filed to the case folder when the check runs. You can upload Utility bill, passport, Bank statement, ID card.
             </p>
 
             {/* Hidden native file input */}
@@ -765,6 +811,10 @@ export const NewScreeningPage: React.FC = () => {
 
               <div style={{ fontSize: '13px', fontWeight: 600, color: '#111827' }}>
                 Drag and drop KYC documents
+              </div>
+
+              <div style={{ fontSize: '11.5px', color: '#4B5563', fontWeight: 500 }}>
+                You can upload Utility bill, passport, Bank statement, ID card
               </div>
 
               <div style={{ fontSize: '11px', color: '#6B7280' }}>

@@ -8,6 +8,8 @@ import type {
   CheckResult,
   ReviewerDecision,
   DocumentPayloadItem,
+  DocumentValidationStatus,
+  DocumentValidationDetails,
 } from '../types/kyc';
 import { getContext } from '@microsoft/power-apps/app';
 import { KYC_ScreenCustomerService } from '../generated/services/KYC_ScreenCustomerService';
@@ -61,6 +63,44 @@ export function normalizeDobToYmd(val: string): string {
   return trimmed;
 }
 
+/**
+ * Safely parses DocumentValidationDetails JSON string from Power Automate or SharePoint.
+ * Handles null, empty strings, objects, and malformed JSON gracefully without throwing.
+ */
+export function parseDocumentValidationDetails(
+  rawDetails?: string | DocumentValidationDetails | null
+): DocumentValidationDetails | null {
+  if (!rawDetails) return null;
+  if (typeof rawDetails === 'object') return rawDetails;
+  if (typeof rawDetails !== 'string') return null;
+
+  const trimmed = rawDetails.trim();
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return null;
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === 'object' && parsed !== null) {
+      if (typeof parsed === 'string') {
+        try {
+          const secondParse = JSON.parse(parsed);
+          if (typeof secondParse === 'object' && secondParse !== null) {
+            return secondParse as DocumentValidationDetails;
+          }
+        } catch {
+          return { overallRemarks: parsed };
+        }
+      }
+      return parsed as DocumentValidationDetails;
+    }
+    return { overallRemarks: String(parsed) };
+  } catch (err) {
+    console.warn('[KYC] Failed to parse DocumentValidationDetails JSON gracefully:', err, trimmed);
+    return {
+      overallRemarks: trimmed,
+    };
+  }
+}
+
 export interface IKycService {
   getCases(): Promise<KycCase[]>;
   getCaseById(caseId: string): Promise<KycCase | null>;
@@ -83,6 +123,8 @@ export interface IKycService {
     matchReason?: string | null;
     matchType?: string;
     documentsLink?: string | null;
+    documentValidationStatus?: DocumentValidationStatus | string | null;
+    documentValidationDetails?: DocumentValidationDetails | string | null;
   }>;
   recordDecision(
     caseId: string,
@@ -1112,6 +1154,8 @@ export class MockKycService implements IKycService {
     matchReason?: string | null;
     matchType?: string;
     documentsLink?: string | null;
+    documentValidationStatus?: DocumentValidationStatus | string | null;
+    documentValidationDetails?: DocumentValidationDetails | string | null;
   }> {
     const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const newCaseNumber = this.cases.length + 1;
@@ -1200,6 +1244,8 @@ export class MockKycService implements IKycService {
       matchReason: screeningResult.matchReason,
       matchType,
       documentsLink: `/documents/${caseId}`,
+      documentValidationStatus: null,
+      documentValidationDetails: null,
     };
   }
 
@@ -1446,6 +1492,36 @@ export function mapKycCaseReadToKycCase(item: KYC_CasesRead): KycCase {
     item['Reviewer#Claims'] ||
     null;
 
+  // Document Validation SharePoint columns
+  const rawDocStatus =
+    (item as any).DocumentValidationStatus ||
+    (item as any).DocumentStatus ||
+    (item as any)['Document status'] ||
+    (item as any)['Document_x0020_status'] ||
+    (item as any)['Document_x0020_Status'] ||
+    null;
+
+  const rawDocDetails =
+    (item as any).DocumentValidationDetails ||
+    (item as any).Validation ||
+    (item as any)['validation'] ||
+    (item as any)['Validation'] ||
+    (item as any)['Validation Details'] ||
+    (item as any)['ValidationDetails'] ||
+    null;
+
+  const rawDocDate =
+    (item as any).DocumentValidationDate ||
+    (item as any).DatetimeOfValidation ||
+    (item as any)['datetime of validaton'] ||
+    (item as any)['Datetime of validation'] ||
+    (item as any)['Datetime_x0020_of_x0020_validaton'] ||
+    (item as any)['Datetime_x0020_of_x0020_validation'] ||
+    null;
+
+  const parsedDocDetails = parseDocumentValidationDetails(rawDocDetails);
+  const docStatus = (rawDocStatus || parsedDocDetails?.overallValidationStatus || null) as DocumentValidationStatus | null;
+
   return {
     caseId,
     customerName: item.CustomerName || item.Title || 'Unknown Customer',
@@ -1462,6 +1538,9 @@ export function mapKycCaseReadToKycCase(item: KYC_CasesRead): KycCase {
     decidedOn: item.DecidedOn || null,
     documentsLink: item.DocumentsLink || `/documents/${caseId}`,
     documentNames: [],
+    documentValidationStatus: docStatus,
+    documentValidationDetails: parsedDocDetails,
+    documentValidationDate: rawDocDate,
     createdAt: item.Created || item.CheckedOn || new Date().toISOString(),
   };
 }
@@ -1614,8 +1693,6 @@ export class PowerKycService implements IKycService {
         text_3: customer.address,
         text_4: docJson,
         text_5: userEmail,
-        text_6: '',
-        text_7: '',
       });
 
       // Visual progress transition for stage 1 & 2 while flow executes
@@ -1631,49 +1708,84 @@ export class PowerKycService implements IKycService {
       onProgress?.({ stage: 'preparing_result' });
       await new Promise((r) => setTimeout(r, 400));
 
-      if (flowResult && flowResult.data) {
-        const data = flowResult.data;
-        const caseId = data.caseid || `KYC-${Date.now().toString().slice(-4)}`;
-        const checkResult = (data.checkresult as CheckResult) || 'Potential Match';
-        const matchedEntry = data.matchedentry || null;
-        const matchReason = data.matchreason || null;
-        const matchType = data.matchtype || 'Screening Complete';
-        const documentsLink = data.documentslink || `/documents/${caseId}`;
-
-        const newCase: KycCase = {
-          caseId,
-          customerName: customer.customerName,
-          dob: customer.dob,
-          nationality: customer.nationality,
-          address: customer.address,
-          checkResult,
-          matchedEntry,
-          matchReason,
-          reviewerDecision: 'Pending review',
-          checkedOn: new Date().toISOString(),
-          createdAt: new Date().toISOString(),
-          documentNames: resolvedDocNames,
-          documents: customer.documents,
-          documentsLink,
-        };
-
-        this.mockFallback.addCaseDirectly(newCase);
-        onProgress?.({ stage: 'completed', caseId });
-
-        return {
-          caseId,
-          checkResult,
-          matchedEntry,
-          matchReason,
-          matchType,
-          documentsLink,
-        };
+      if (!flowResult || !flowResult.data) {
+        const errorMsg =
+          (flowResult as any)?.error?.message ||
+          (flowResult as any)?.errorMessage ||
+          'Power Automate screening flow returned an empty response or failed to complete.';
+        console.error('[Power Automate] Flow execution returned unsuccessful result:', errorMsg, flowResult);
+        onProgress?.({ stage: 'failed', error: errorMsg });
+        throw new Error(errorMsg);
       }
-    } catch (flowErr) {
-      console.warn('[Power Automate] Live flow execution failed or running standalone, falling back to mock screening:', flowErr);
-    }
 
-    return this.mockFallback.screenCustomer(customer, onProgress);
+      const data = flowResult.data;
+      const caseId = data.caseid || (data as any).CaseID || `KYC-${Date.now().toString().slice(-4)}`;
+      const checkResult = ((data.checkresult || (data as any).CheckResult) as CheckResult) || 'Potential Match';
+      const matchedEntry = data.matchedentry || (data as any).MatchedEntry || null;
+      const matchReason = data.matchreason || (data as any).MatchReason || null;
+      const matchType = data.matchtype || (data as any).MatchType || 'Screening Complete';
+      const documentsLink = data.documentslink || (data as any).DocumentsLink || `/documents/${caseId}`;
+
+      // Capture DocumentValidationStatus and DocumentValidationDetails from flow response
+      const rawDocValidationStatus =
+        data.documentvalidationstatus ||
+        (data as any).DocumentValidationStatus ||
+        (data as any)['DocumentValidationStatus'] ||
+        null;
+
+      const rawDocValidationDetails =
+        data.documentvalidationdetails ||
+        (data as any).DocumentValidationDetails ||
+        (data as any)['DocumentValidationDetails'] ||
+        null;
+
+      console.log('[Power Automate] Captured DocumentValidationStatus:', rawDocValidationStatus);
+      console.log('[Power Automate] Captured DocumentValidationDetails:', rawDocValidationDetails);
+
+      const parsedValidationDetails = parseDocumentValidationDetails(rawDocValidationDetails);
+      const docValidationStatus = (rawDocValidationStatus || parsedValidationDetails?.overallValidationStatus || null) as DocumentValidationStatus | null;
+
+      const newCase: KycCase = {
+        caseId,
+        customerName: customer.customerName,
+        dob: customer.dob,
+        nationality: customer.nationality,
+        address: customer.address,
+        checkResult,
+        matchedEntry,
+        matchReason,
+        reviewerDecision: 'Pending review',
+        checkedOn: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        documentNames: resolvedDocNames,
+        documents: customer.documents,
+        documentsLink,
+        documentValidationStatus: docValidationStatus,
+        documentValidationDetails: parsedValidationDetails,
+        documentValidationDate: new Date().toISOString(),
+      };
+
+      this.mockFallback.addCaseDirectly(newCase);
+      onProgress?.({ stage: 'completed', caseId });
+
+      return {
+        caseId,
+        checkResult,
+        matchedEntry,
+        matchReason,
+        matchType,
+        documentsLink,
+        documentValidationStatus: docValidationStatus,
+        documentValidationDetails: parsedValidationDetails,
+      };
+    } catch (flowErr: any) {
+      console.error('[Power Automate] Live screening flow failed:', flowErr);
+      const errorMsg =
+        flowErr?.message ||
+        (typeof flowErr === 'string' ? flowErr : 'Power Automate screening flow execution failed.');
+      onProgress?.({ stage: 'failed', error: errorMsg });
+      throw new Error(errorMsg);
+    }
   }
 
   async recordDecision(

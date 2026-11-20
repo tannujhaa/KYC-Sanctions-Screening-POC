@@ -16,10 +16,6 @@ export interface ManualTriggerInput {
   text_4: string;
   // Please enter your input
   text_5: string;
-  // ReviewerDecision
-  text_6?: string;
-  // reviewercomments
-  text_7?: string;
 }
 
 export interface ResponseActionOutput {
@@ -29,4 +25,14 @@ export interface ResponseActionOutput {
   matchreason?: string;
   matchtype?: string;
   documentslink?: string;
+  documentvalidationstatus?: string;
+  documentvalidationdetails?: string;
+  CaseID?: string;
+  CheckResult?: string;
+  MatchedEntry?: string;
+  MatchReason?: string;
+  MatchType?: string;
+  DocumentsLink?: string;
+  DocumentValidationStatus?: string;
+  DocumentValidationDetails?: string;
 }

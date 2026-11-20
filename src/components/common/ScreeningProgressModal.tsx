@@ -28,6 +28,15 @@ export const ScreeningProgressModal: React.FC<ScreeningProgressModalProps> = ({
 }) => {
   if (!isOpen) return null;
 
+  // Track the last active stage before failure so we show which step failed
+  const [lastActiveStage, setLastActiveStage] = React.useState<ScreeningStage>('creating_case');
+
+  React.useEffect(() => {
+    if (currentStage !== 'failed') {
+      setLastActiveStage(currentStage);
+    }
+  }, [currentStage]);
+
   // Stages definition
   const stages: Array<{
     id: ScreeningStage;
@@ -101,21 +110,25 @@ export const ScreeningProgressModal: React.FC<ScreeningProgressModalProps> = ({
           userSelect: 'none',
         }}
       >
-        {/* Shield Icon in soft purple box */}
+        {/* Top Icon box */}
         <div
           style={{
             width: '42px',
             height: '42px',
             borderRadius: '10px',
-            backgroundColor: '#FAF4FB',
-            color: '#831B84',
+            backgroundColor: currentStage === 'failed' ? '#FEE2E2' : '#FAF4FB',
+            color: currentStage === 'failed' ? '#DC2626' : '#831B84',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             marginBottom: '14px',
           }}
         >
-          <Shield size={22} strokeWidth={2.2} />
+          {currentStage === 'failed' ? (
+            <AlertCircle size={22} strokeWidth={2.2} />
+          ) : (
+            <Shield size={22} strokeWidth={2.2} />
+          )}
         </div>
 
         {/* Heading */}
@@ -124,11 +137,11 @@ export const ScreeningProgressModal: React.FC<ScreeningProgressModalProps> = ({
             margin: '0 0 4px 0',
             fontSize: '20px',
             fontWeight: 700,
-            color: '#111827',
+            color: currentStage === 'failed' ? '#991B1B' : '#111827',
             letterSpacing: '-0.3px',
           }}
         >
-          Running sanctions check
+          {currentStage === 'failed' ? 'Screening flow failed' : 'Running sanctions check'}
         </h2>
 
         {/* Customer Information Subtitle */}
@@ -145,9 +158,15 @@ export const ScreeningProgressModal: React.FC<ScreeningProgressModalProps> = ({
         {/* 4 Progress Stage Rows */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', marginBottom: '22px' }}>
           {stages.map((stg, idx) => {
-            const isCompleted = currentIdx > idx || currentStage === 'completed';
+            const failedIdx = stageOrder.indexOf(lastActiveStage);
+            const isCompleted =
+              currentStage === 'failed'
+                ? idx < failedIdx
+                : currentIdx > idx || currentStage === 'completed';
             const isInProgress = currentStage === stg.id;
-            const isFailed = currentStage === 'failed' && currentIdx === idx;
+            const isFailed =
+              currentStage === 'failed' &&
+              (idx === failedIdx || (failedIdx === -1 && idx === 0));
             const isPending = !isCompleted && !isInProgress && !isFailed;
 
             return (
@@ -230,7 +249,7 @@ export const ScreeningProgressModal: React.FC<ScreeningProgressModalProps> = ({
                   <span
                     style={{
                       fontWeight: isInProgress ? 600 : isCompleted ? 500 : 400,
-                      color: isInProgress ? '#831B84' : isCompleted ? '#1F2937' : '#6B7280',
+                      color: isFailed ? '#DC2626' : isInProgress ? '#831B84' : isCompleted ? '#1F2937' : '#6B7280',
                     }}
                   >
                     {stg.label}
@@ -242,11 +261,22 @@ export const ScreeningProgressModal: React.FC<ScreeningProgressModalProps> = ({
                   <span
                     style={{
                       fontSize: '12px',
-                      color: '#6B7280',
+                      color: '#16A34A',
                       fontWeight: 500,
                     }}
                   >
                     Done
+                  </span>
+                )}
+                {isFailed && (
+                  <span
+                    style={{
+                      fontSize: '12px',
+                      color: '#DC2626',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Failed
                   </span>
                 )}
               </div>
@@ -261,32 +291,22 @@ export const ScreeningProgressModal: React.FC<ScreeningProgressModalProps> = ({
               backgroundColor: '#FEF2F2',
               border: '1px solid #FCA5A5',
               borderRadius: '8px',
-              padding: '10px 14px',
-              fontSize: '12px',
-              color: '#B91C1C',
+              padding: '12px 14px',
               marginBottom: '16px',
             }}
           >
-            {errorMessage || 'Screening operation failed. Please try again.'}
-            <div style={{ marginTop: '8px', display: 'flex', gap: '8px' }}>
-              {onRetry && (
-                <button
-                  type="button"
-                  onClick={onRetry}
-                  style={{
-                    backgroundColor: '#DC2626',
-                    color: '#FFFFFF',
-                    border: 'none',
-                    borderRadius: '6px',
-                    padding: '4px 10px',
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Retry screening
-                </button>
-              )}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '8px' }}>
+              <AlertCircle size={16} color="#DC2626" style={{ marginTop: '1px', flexShrink: 0 }} />
+              <div>
+                <div style={{ fontSize: '12.5px', fontWeight: 600, color: '#991B1B', marginBottom: '2px' }}>
+                  Flow Execution Error
+                </div>
+                <div style={{ fontSize: '12px', color: '#B91C1C', lineHeight: 1.45, wordBreak: 'break-word' }}>
+                  {errorMessage || 'The ScreenCustomer Power Automate flow failed to complete. Check the flow run history in Power Automate.'}
+                </div>
+              </div>
+            </div>
+            <div style={{ marginTop: '10px', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
               {onCancel && (
                 <button
                   type="button"
@@ -296,13 +316,32 @@ export const ScreeningProgressModal: React.FC<ScreeningProgressModalProps> = ({
                     border: '1px solid #D1D5DB',
                     color: '#374151',
                     borderRadius: '6px',
-                    padding: '4px 10px',
-                    fontSize: '11px',
+                    padding: '6px 12px',
+                    fontSize: '12px',
                     fontWeight: 600,
                     cursor: 'pointer',
                   }}
                 >
-                  Cancel
+                  Close
+                </button>
+              )}
+              {onRetry && (
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  style={{
+                    backgroundColor: '#DC2626',
+                    color: '#FFFFFF',
+                    border: 'none',
+                    borderRadius: '6px',
+                    padding: '6px 14px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    boxShadow: '0 1px 2px rgba(220, 38, 38, 0.2)',
+                  }}
+                >
+                  Retry screening
                 </button>
               )}
             </div>
