@@ -8,9 +8,10 @@ import {
   Calendar,
   AlertCircle,
   Sparkles,
+  User,
 } from 'lucide-react';
 import { kycService, normalizeDobToYmd } from '../services/kycService';
-import type { ScreeningStage, DocumentPayloadItem } from '../types/kyc';
+import type { ScreeningStage, DocumentPayloadItem, ScreeningMethod } from '../types/kyc';
 import { ScreeningProgressModal } from '../components/common/ScreeningProgressModal';
 
 interface UploadedDoc {
@@ -108,13 +109,16 @@ export const NewScreeningPage: React.FC = () => {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Form State
+  // Method State (Default: 'manual')
+  const [screeningMethod, setScreeningMethod] = useState<ScreeningMethod>('manual');
+
+  // Form State (Manual Entry)
   const [fullName, setFullName] = useState('');
   const [dob, setDob] = useState('');
   const [nationality, setNationality] = useState('');
   const [address, setAddress] = useState('');
 
-  // Documents State
+  // Documents State (Document Upload)
   const [documents, setDocuments] = useState<UploadedDoc[]>([]);
 
   const [isDragging, setIsDragging] = useState(false);
@@ -135,32 +139,27 @@ export const NewScreeningPage: React.FC = () => {
 
   // Quick fill helper for demo/testing
   const handleAutoFillAndRun = () => {
-    const sampleDocs: UploadedDoc[] = [
-      {
-        id: 'doc-1',
-        name: 'Specimen_ID_Markus_Thorn.pdf',
-        sizeFormatted: '182 KB',
-        sizeBytes: 182 * 1024,
-        contentBytes: SAMPLE_PDF_BASE64,
-      },
-      {
-        id: 'doc-2',
-        name: 'Proof_of_Address.pdf',
-        sizeFormatted: '96 KB',
-        sizeBytes: 96 * 1024,
-        contentBytes: SAMPLE_PDF_BASE64,
-      },
-    ];
-
-    setFullName('Markus Thorn');
-    setDob('1971-08-22');
-    setNationality('German');
-    setAddress('14 Harbour Lane, Eastmere');
-    setDocuments(sampleDocs);
-    setErrors({});
-
-    // Trigger screening directly with sample data
-    executeScreening('Markus Thorn', '1971-08-22', 'German', '14 Harbour Lane, Eastmere', sampleDocs);
+    if (screeningMethod === 'manual') {
+      setFullName('Markus Thorn');
+      setDob('1971-08-22');
+      setNationality('German');
+      setAddress('14 Harbour Lane, Eastmere');
+      setErrors({});
+      executeScreening('manual', 'Markus Thorn', '1971-08-22', 'German', '14 Harbour Lane, Eastmere', []);
+    } else {
+      const sampleDocs: UploadedDoc[] = [
+        {
+          id: 'doc-1',
+          name: 'Specimen_Passport_Gourav_Kumar.pdf',
+          sizeFormatted: '182 KB',
+          sizeBytes: 182 * 1024,
+          contentBytes: SAMPLE_PDF_BASE64,
+        },
+      ];
+      setDocuments(sampleDocs);
+      setErrors({});
+      executeScreening('document', '', '', '', '', sampleDocs);
+    }
   };
 
   // Handle files added via drag & drop or file picker
@@ -207,36 +206,58 @@ export const NewScreeningPage: React.FC = () => {
     setDocuments((prev) => prev.filter((d) => d.id !== id));
   };
 
+  // Clear button resets selected method, form values, documents, and errors
   const handleClear = () => {
+    setScreeningMethod('manual');
     setFullName('');
     setDob('');
     setNationality('');
     setAddress('');
     setDocuments([]);
     setErrors({});
+    setModalError(undefined);
   };
 
-  // Form Validation
+  // Determine if form requirements are satisfied for the selected method
+  const isFormValid = (() => {
+    if (screeningMethod === 'manual') {
+      const cleanDob = normalizeDobToYmd(dob);
+      return (
+        fullName.trim().length > 0 &&
+        Boolean(cleanDob) &&
+        /^\d{4}-\d{2}-\d{2}$/.test(cleanDob) &&
+        nationality.trim().length > 0 &&
+        address.trim().length > 0
+      );
+    }
+    return documents.length > 0;
+  })();
+
+  // Form Validation: only validates the currently selected method
   const validateForm = (): boolean => {
     const newErrors: FormErrors = {};
 
-    if (!fullName.trim()) {
-      newErrors.fullName = 'Full legal name is required.';
-    }
-    const cleanDob = normalizeDobToYmd(dob);
-    if (!cleanDob) {
-      newErrors.dob = 'Date of birth is required.';
-    } else if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanDob)) {
-      newErrors.dob = 'Date of birth must be a valid date in YYYY-MM-DD format.';
-    }
-    if (!nationality.trim()) {
-      newErrors.nationality = 'Nationality is required.';
-    }
-    if (!address.trim()) {
-      newErrors.address = 'Residential address is required.';
-    }
-    if (documents.length === 0) {
-      newErrors.documents = 'At least one KYC document is required.';
+    if (screeningMethod === 'manual') {
+      if (!fullName.trim()) {
+        newErrors.fullName = 'Full legal name is required.';
+      }
+      const cleanDob = normalizeDobToYmd(dob);
+      if (!cleanDob) {
+        newErrors.dob = 'Date of birth is required.';
+      } else if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanDob)) {
+        newErrors.dob = 'Date of birth must be a valid date in YYYY-MM-DD format.';
+      }
+      if (!nationality.trim()) {
+        newErrors.nationality = 'Nationality is required.';
+      }
+      if (!address.trim()) {
+        newErrors.address = 'Residential address is required.';
+      }
+    } else {
+      // Document upload mode
+      if (documents.length === 0) {
+        newErrors.documents = 'At least one KYC document is required.';
+      }
     }
 
     setErrors(newErrors);
@@ -245,6 +266,7 @@ export const NewScreeningPage: React.FC = () => {
 
   // Central screening executor
   const executeScreening = async (
+    method: ScreeningMethod,
     nameVal: string,
     dobVal: string,
     natVal: string,
@@ -256,42 +278,67 @@ export const NewScreeningPage: React.FC = () => {
     try {
       setIsSubmitting(true);
       setModalError(undefined);
-
-      // Verify and prepare document payload items with pure Base64 content
-      const payloadDocuments: DocumentPayloadItem[] = [];
-
-      for (const doc of docsVal) {
-        let base64 = doc.contentBytes;
-        if (!base64 && doc.file) {
-          try {
-            base64 = await readFileAsBase64(doc.file);
-          } catch (fileErr: any) {
-            throw new Error(`Failed to read document "${doc.name}": ${fileErr?.message || 'File read error'}`);
-          }
-        }
-        if (!base64) {
-          throw new Error(`Document "${doc.name}" has no readable content.`);
-        }
-        payloadDocuments.push({
-          name: doc.name,
-          contentBytes: base64,
-        });
-      }
-
-      const cleanDob = normalizeDobToYmd(dobVal);
       setCurrentStage('creating_case');
       setIsModalOpen(true);
 
-      console.log('[NewScreeningPage] Invoking Power Automate Flow for:', nameVal, 'DOB (YYYY-MM-DD):', cleanDob, 'with documents:', payloadDocuments.map(d => d.name));
+      let finalCustomerName = '';
+      let finalDob = '';
+      let finalNationality = '';
+      let finalAddress = '';
+      const payloadDocuments: DocumentPayloadItem[] = [];
+
+      if (method === 'manual') {
+        // Option 1: Manual Entry - send customer details and empty documents array
+        finalCustomerName = nameVal.trim();
+        finalDob = normalizeDobToYmd(dobVal);
+        finalNationality = natVal.trim();
+        finalAddress = addrVal.trim();
+      } else {
+        // Option 2: Document Upload - send empty customer detail values and uploaded documents
+        finalCustomerName = '';
+        finalDob = '';
+        finalNationality = '';
+        finalAddress = '';
+
+        for (const doc of docsVal) {
+          let base64 = doc.contentBytes;
+          if (!base64 && doc.file) {
+            try {
+              base64 = await readFileAsBase64(doc.file);
+            } catch (fileErr: any) {
+              throw new Error(`Failed to read document "${doc.name}": ${fileErr?.message || 'File read error'}`);
+            }
+          }
+          if (!base64) {
+            throw new Error(`Document "${doc.name}" has no readable content.`);
+          }
+          payloadDocuments.push({
+            name: doc.name,
+            contentBytes: base64,
+          });
+        }
+      }
+
+      console.log(
+        `[NewScreeningPage] Invoking Power Automate Flow (Method: ${method}) with:`,
+        {
+          customerName: finalCustomerName,
+          dob: finalDob,
+          nationality: finalNationality,
+          address: finalAddress,
+          documentsCount: payloadDocuments.length,
+        }
+      );
 
       const result = await kycService.screenCustomer(
         {
-          customerName: nameVal.trim(),
-          dob: cleanDob,
-          nationality: natVal.trim(),
-          address: addrVal.trim(),
+          customerName: finalCustomerName,
+          dob: finalDob,
+          nationality: finalNationality,
+          address: finalAddress,
           documents: payloadDocuments,
           documentNames: payloadDocuments.map((d) => d.name),
+          screeningMethod: method,
         },
         (progress) => {
           console.log('[NewScreeningPage] Stage progress update:', progress.stage);
@@ -308,12 +355,29 @@ export const NewScreeningPage: React.FC = () => {
       setTimeout(() => {
         setIsModalOpen(false);
         setIsSubmitting(false);
-        navigate(`/result/${result.caseId}`, { state: { screeningResult: result } });
+        navigate(`/result/${result.caseId}`, {
+          state: {
+            screeningResult: {
+              ...result,
+              screeningMethod: method,
+            },
+            screeningMethod: method,
+          },
+        });
       }, 500);
     } catch (err: any) {
       console.error('[NewScreeningPage] Screening failed:', err);
       setCurrentStage('failed');
-      setModalError(err?.message || 'Power Automate flow execution encountered an error.');
+      setIsModalOpen(true);
+      const rawMsg = err?.message || 'Power Automate flow execution encountered an error.';
+      const friendlyMsg =
+        rawMsg.toLowerCase().includes('forbidden') ||
+        rawMsg.toLowerCase().includes('unauthorized') ||
+        rawMsg.toLowerCase().includes('403') ||
+        rawMsg.toLowerCase().includes('permission')
+          ? 'Permission Denied: Your account does not have permission to run the KYC Screen Customer flow or access the SharePoint site. Please ensure the flow has been shared with you under Run-only users in Power Automate and you have access to the QA SharePoint site.'
+          : rawMsg;
+      setModalError(friendlyMsg);
       setIsSubmitting(false);
     }
   };
@@ -323,12 +387,13 @@ export const NewScreeningPage: React.FC = () => {
     if (isSubmitting) return;
 
     if (!validateForm()) {
-      console.warn('[NewScreeningPage] Form validation failed, please fill all fields.');
+      console.warn('[NewScreeningPage] Form validation failed for method:', screeningMethod);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
     const cleanDob = normalizeDobToYmd(dob);
-    executeScreening(fullName, cleanDob, nationality, address, documents);
+    executeScreening(screeningMethod, fullName, cleanDob, nationality, address, documents);
   };
 
   // Retry screening action from modal
@@ -336,12 +401,9 @@ export const NewScreeningPage: React.FC = () => {
     setModalError(undefined);
     setCurrentStage('creating_case');
     const cleanDob = normalizeDobToYmd(dob);
-    executeScreening(fullName, cleanDob, nationality, address, documents);
+    executeScreening(screeningMethod, fullName, cleanDob, nationality, address, documents);
   };
 
-  // Total size of uploaded documents
-  const totalSizeBytes = documents.reduce((acc, d) => acc + d.sizeBytes, 0);
-  const totalSizeFormatted = formatFileSize(totalSizeBytes);
   const hasErrors = Object.keys(errors).length > 0;
 
   return (
@@ -368,7 +430,7 @@ export const NewScreeningPage: React.FC = () => {
           New KYC case
         </h1>
         <p style={{ margin: 0, fontSize: '13px', color: '#6B7280' }}>
-          Enter customer details and attach supporting documents to run a sanctions check.
+          Select a screening method and provide the required information to run a sanctions check.
         </p>
       </div>
 
@@ -438,7 +500,11 @@ export const NewScreeningPage: React.FC = () => {
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <AlertCircle size={16} />
-            <span>Please complete all required fields and upload at least one document to run the flow.</span>
+            <span>
+              {screeningMethod === 'manual'
+                ? 'Please complete all four customer details fields to run the sanctions check.'
+                : 'Please upload at least one KYC document to run the sanctions check.'}
+            </span>
           </div>
 
           {/* Quick Auto-fill button */}
@@ -465,33 +531,232 @@ export const NewScreeningPage: React.FC = () => {
         </div>
       )}
 
-      {/* 2. Main Layout Form */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', width: '100%' }}>
+      {/* 2. Screening Method Selection Section */}
+      <div
+        style={{
+          backgroundColor: '#FFFFFF',
+          border: '1px solid #E5E7EB',
+          borderRadius: '12px',
+          padding: '20px 24px',
+          marginBottom: '20px',
+          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.03)',
+        }}
+      >
+        <div style={{ marginBottom: '14px' }}>
+          <h2
+            style={{
+              margin: '0 0 4px 0',
+              fontSize: '15px',
+              fontWeight: 600,
+              color: '#111827',
+            }}
+          >
+            Screening Method
+          </h2>
+          <p style={{ margin: 0, fontSize: '12.5px', color: '#6B7280' }}>
+            Choose how you would like to provide customer information for sanctions screening.
+          </p>
+        </div>
+
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'minmax(0, 1.15fr) minmax(0, 1fr)',
-            gap: '20px',
-            alignItems: 'stretch',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+            gap: '16px',
             width: '100%',
           }}
         >
-          {/* LEFT CARD: Customer Details */}
+          {/* Card 1: Manual Entry */}
+          <div
+            onClick={() => {
+              setScreeningMethod('manual');
+              setErrors({});
+            }}
+            role="radio"
+            aria-checked={screeningMethod === 'manual'}
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === ' ' || e.key === 'Enter') {
+                setScreeningMethod('manual');
+                setErrors({});
+              }
+            }}
+            style={{
+              border: screeningMethod === 'manual' ? '2px solid #831B84' : '1px solid #E5E7EB',
+              backgroundColor: screeningMethod === 'manual' ? '#FAF4FB' : '#FFFFFF',
+              borderRadius: '10px',
+              padding: '16px 18px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '14px',
+              transition: 'all 0.15s ease',
+              position: 'relative',
+              boxShadow: screeningMethod === 'manual' ? '0 2px 6px rgba(131, 27, 132, 0.08)' : 'none',
+            }}
+          >
+            <div
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '8px',
+                backgroundColor: screeningMethod === 'manual' ? '#831B84' : '#F3F4F6',
+                color: screeningMethod === 'manual' ? '#FFFFFF' : '#6B7280',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <User size={18} />
+            </div>
+
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: '3px',
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    color: screeningMethod === 'manual' ? '#831B84' : '#111827',
+                  }}
+                >
+                  Manual Entry
+                </span>
+                {/* Radio Circle */}
+                <div
+                  style={{
+                    width: '18px',
+                    height: '18px',
+                    borderRadius: '50%',
+                    border: screeningMethod === 'manual' ? '5px solid #831B84' : '2px solid #D1D5DB',
+                    backgroundColor: '#FFFFFF',
+                    boxSizing: 'border-box',
+                    flexShrink: 0,
+                    transition: 'all 0.15s ease',
+                  }}
+                />
+              </div>
+              <p style={{ margin: 0, fontSize: '12px', color: '#6B7280', lineHeight: 1.4 }}>
+                Enter customer information manually.
+              </p>
+            </div>
+          </div>
+
+          {/* Card 2: Document Upload */}
+          <div
+            onClick={() => {
+              setScreeningMethod('document');
+              setErrors({});
+            }}
+            role="radio"
+            aria-checked={screeningMethod === 'document'}
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === ' ' || e.key === 'Enter') {
+                setScreeningMethod('document');
+                setErrors({});
+              }
+            }}
+            style={{
+              border: screeningMethod === 'document' ? '2px solid #831B84' : '1px solid #E5E7EB',
+              backgroundColor: screeningMethod === 'document' ? '#FAF4FB' : '#FFFFFF',
+              borderRadius: '10px',
+              padding: '16px 18px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '14px',
+              transition: 'all 0.15s ease',
+              position: 'relative',
+              boxShadow: screeningMethod === 'document' ? '0 2px 6px rgba(131, 27, 132, 0.08)' : 'none',
+            }}
+          >
+            <div
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '8px',
+                backgroundColor: screeningMethod === 'document' ? '#831B84' : '#F3F4F6',
+                color: screeningMethod === 'document' ? '#FFFFFF' : '#6B7280',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <UploadCloud size={18} />
+            </div>
+
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: '3px',
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    color: screeningMethod === 'document' ? '#831B84' : '#111827',
+                  }}
+                >
+                  Document Upload
+                </span>
+                {/* Radio Circle */}
+                <div
+                  style={{
+                    width: '18px',
+                    height: '18px',
+                    borderRadius: '50%',
+                    border: screeningMethod === 'document' ? '5px solid #831B84' : '2px solid #D1D5DB',
+                    backgroundColor: '#FFFFFF',
+                    boxSizing: 'border-box',
+                    flexShrink: 0,
+                    transition: 'all 0.15s ease',
+                  }}
+                />
+              </div>
+              <p style={{ margin: 0, fontSize: '12px', color: '#6B7280', lineHeight: 1.4 }}>
+                Upload identity and address documents.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 3. Main Form Area (Conditionally displays ONLY the selected method's card) */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', width: '100%' }}>
+        {screeningMethod === 'manual' ? (
+          /* OPTION 1: Manual Entry - ONLY Customer Details Card */
           <div
             style={{
               backgroundColor: '#FFFFFF',
               border: '1px solid #E5E7EB',
               borderRadius: '12px',
-              padding: '20px 24px',
+              padding: '24px 28px',
               boxShadow: '0 1px 3px rgba(0, 0, 0, 0.03)',
               display: 'flex',
               flexDirection: 'column',
+              width: '100%',
+              boxSizing: 'border-box',
             }}
           >
             <h2
               style={{
                 margin: '0 0 2px 0',
-                fontSize: '15px',
+                fontSize: '16px',
                 fontWeight: 600,
                 color: '#111827',
               }}
@@ -500,15 +765,15 @@ export const NewScreeningPage: React.FC = () => {
             </h2>
             <p
               style={{
-                margin: '0 0 16px 0',
-                fontSize: '12px',
+                margin: '0 0 18px 0',
+                fontSize: '12.5px',
                 color: '#6B7280',
               }}
             >
-              Fields marked * are required for screening.
+              Fields marked * are required for manual screening.
             </p>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', width: '100%' }}>
               {/* Full legal name */}
               <div>
                 <label
@@ -532,7 +797,7 @@ export const NewScreeningPage: React.FC = () => {
                   }}
                   style={{
                     width: '100%',
-                    height: '38px',
+                    height: '40px',
                     padding: '0 12px',
                     fontSize: '13px',
                     borderRadius: '8px',
@@ -558,8 +823,8 @@ export const NewScreeningPage: React.FC = () => {
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: '14px',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                  gap: '16px',
                 }}
               >
                 {/* Date of Birth */}
@@ -586,7 +851,7 @@ export const NewScreeningPage: React.FC = () => {
                       placeholder="YYYY-MM-DD"
                       style={{
                         width: '100%',
-                        height: '38px',
+                        height: '40px',
                         padding: '0 12px',
                         fontSize: '13px',
                         borderRadius: '8px',
@@ -638,7 +903,7 @@ export const NewScreeningPage: React.FC = () => {
                     }}
                     style={{
                       width: '100%',
-                      height: '38px',
+                      height: '40px',
                       padding: '0 12px',
                       fontSize: '13px',
                       borderRadius: '8px',
@@ -669,7 +934,7 @@ export const NewScreeningPage: React.FC = () => {
               </div>
 
               {/* Residential address */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+              <div>
                 <label
                   style={{
                     display: 'block',
@@ -688,10 +953,9 @@ export const NewScreeningPage: React.FC = () => {
                     setAddress(e.target.value);
                     if (errors.address) setErrors((prev) => ({ ...prev, address: undefined }));
                   }}
+                  rows={3}
                   style={{
                     width: '100%',
-                    flex: 1,
-                    minHeight: '80px',
                     padding: '10px 12px',
                     fontSize: '13px',
                     borderRadius: '8px',
@@ -700,7 +964,7 @@ export const NewScreeningPage: React.FC = () => {
                     color: '#111827',
                     outline: 'none',
                     boxSizing: 'border-box',
-                    resize: 'none',
+                    resize: 'vertical',
                     fontFamily: 'inherit',
                   }}
                   onFocus={(e) => (e.target.style.borderColor = errors.address ? '#DC2626' : '#831B84')}
@@ -715,38 +979,39 @@ export const NewScreeningPage: React.FC = () => {
               </div>
             </div>
           </div>
-
-          {/* RIGHT CARD: Documents (Unlimited uploads supported) */}
+        ) : (
+          /* OPTION 2: Document Upload - ONLY Documents Upload Card */
           <div
             style={{
               backgroundColor: '#FFFFFF',
               border: '1px solid #E5E7EB',
               borderRadius: '12px',
-              padding: '20px 24px',
+              padding: '24px 28px',
               boxShadow: '0 1px 3px rgba(0, 0, 0, 0.03)',
               display: 'flex',
               flexDirection: 'column',
+              width: '100%',
               boxSizing: 'border-box',
             }}
           >
             <h2
               style={{
                 margin: '0 0 2px 0',
-                fontSize: '15px',
+                fontSize: '16px',
                 fontWeight: 600,
                 color: '#111827',
               }}
             >
-              Documents *
+              Document upload *
             </h2>
             <p
               style={{
-                margin: '0 0 14px 0',
-                fontSize: '12px',
+                margin: '0 0 16px 0',
+                fontSize: '12.5px',
                 color: '#6B7280',
               }}
             >
-              Filed to the case folder when the check runs. You can upload Utility bill, passport, Bank statement, ID card.
+              Upload one or more supporting documents. Customer information will be extracted from uploaded documents by the screening engine.
             </p>
 
             {/* Hidden native file input */}
@@ -781,24 +1046,24 @@ export const NewScreeningPage: React.FC = () => {
                   ? '#FAF4FB'
                   : '#FAFAFA',
                 borderRadius: '10px',
-                padding: '20px 16px',
+                padding: '28px 20px',
                 textAlign: 'center',
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '6px',
+                gap: '8px',
                 cursor: 'pointer',
                 transition: 'all 0.15s ease',
-                marginBottom: '10px',
+                marginBottom: '16px',
               }}
               onClick={() => fileInputRef.current?.click()}
             >
               <div
                 style={{
-                  width: '36px',
-                  height: '36px',
-                  borderRadius: '8px',
+                  width: '42px',
+                  height: '42px',
+                  borderRadius: '10px',
                   backgroundColor: errors.documents ? '#FEE2E2' : '#FAF4FB',
                   color: errors.documents ? '#DC2626' : '#831B84',
                   display: 'flex',
@@ -806,15 +1071,15 @@ export const NewScreeningPage: React.FC = () => {
                   justifyContent: 'center',
                 }}
               >
-                <UploadCloud size={18} />
+                <UploadCloud size={22} />
               </div>
 
-              <div style={{ fontSize: '13px', fontWeight: 600, color: '#111827' }}>
+              <div style={{ fontSize: '14px', fontWeight: 600, color: '#111827' }}>
                 Drag and drop KYC documents
               </div>
 
-              <div style={{ fontSize: '11.5px', color: '#4B5563', fontWeight: 500 }}>
-                You can upload Utility bill, passport, Bank statement, ID card
+              <div style={{ fontSize: '12px', color: '#4B5563', fontWeight: 500 }}>
+                Supported document types: Utility Bill, Passport, Bank Statement, ID Card
               </div>
 
               <div style={{ fontSize: '11px', color: '#6B7280' }}>
@@ -823,11 +1088,11 @@ export const NewScreeningPage: React.FC = () => {
 
               <span
                 style={{
-                  fontSize: '12px',
+                  fontSize: '12.5px',
                   fontWeight: 600,
                   color: '#831B84',
                   textDecoration: 'none',
-                  marginTop: '2px',
+                  marginTop: '4px',
                 }}
               >
                 Browse files
@@ -839,14 +1104,14 @@ export const NewScreeningPage: React.FC = () => {
               <div
                 style={{
                   color: '#DC2626',
-                  fontSize: '11px',
-                  marginBottom: '10px',
+                  fontSize: '12px',
+                  marginBottom: '12px',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '4px',
+                  gap: '6px',
                 }}
               >
-                <AlertCircle size={12} />
+                <AlertCircle size={14} />
                 <span>{errors.documents}</span>
               </div>
             )}
@@ -857,25 +1122,24 @@ export const NewScreeningPage: React.FC = () => {
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '8px',
-                maxHeight: '170px',
+                maxHeight: '220px',
                 overflowY: 'auto',
-                marginBottom: '14px',
-                flex: 1,
+                width: '100%',
               }}
             >
               {documents.length === 0 ? (
                 <div
                   style={{
-                    padding: '20px 16px',
+                    padding: '24px 16px',
                     textAlign: 'center',
                     color: '#9CA3AF',
-                    fontSize: '12px',
-                    border: '1px dashed #F3F4F6',
+                    fontSize: '12.5px',
+                    border: '1px dashed #E5E7EB',
                     borderRadius: '8px',
                     backgroundColor: '#FAFAFA',
                   }}
                 >
-                  No documents attached yet. Drop files above or click browse.
+                  No documents attached yet. Drop files above or click browse to upload.
                 </div>
               ) : (
                 documents.map((doc) => (
@@ -885,7 +1149,7 @@ export const NewScreeningPage: React.FC = () => {
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
-                      padding: '8px 12px',
+                      padding: '10px 14px',
                       borderRadius: '8px',
                       border: '1px solid #F3F4F6',
                       backgroundColor: '#FAFAFA',
@@ -898,7 +1162,7 @@ export const NewScreeningPage: React.FC = () => {
                       <div style={{ minWidth: 0 }}>
                         <div
                           style={{
-                            fontSize: '12px',
+                            fontSize: '13px',
                             fontWeight: 600,
                             color: '#111827',
                             overflow: 'hidden',
@@ -931,59 +1195,16 @@ export const NewScreeningPage: React.FC = () => {
                       onMouseEnter={(e) => (e.currentTarget.style.color = '#EF4444')}
                       onMouseLeave={(e) => (e.currentTarget.style.color = '#9CA3AF')}
                     >
-                      <X size={15} />
+                      <X size={16} />
                     </button>
                   </div>
                 ))
               )}
             </div>
-
-            {/* Document stats footer & progress bar */}
-            <div
-              style={{
-                marginTop: 'auto',
-                paddingTop: '8px',
-                borderTop: '1px solid #F3F4F6',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '6px',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  fontSize: '11px',
-                  color: '#6B7280',
-                }}
-              >
-                <span>{documents.length} {documents.length === 1 ? 'file' : 'files'} attached</span>
-                <span>{totalSizeFormatted}</span>
-              </div>
-              <div
-                style={{
-                  height: '4px',
-                  backgroundColor: '#E5E7EB',
-                  borderRadius: '9999px',
-                  overflow: 'hidden',
-                  width: '100%',
-                }}
-              >
-                <div
-                  style={{
-                    height: '100%',
-                    width: `${Math.min(100, documents.length * 20)}%`,
-                    backgroundColor: '#831B84',
-                    borderRadius: '9999px',
-                    transition: 'width 0.3s ease',
-                  }}
-                />
-              </div>
-            </div>
           </div>
-        </div>
+        )}
 
-        {/* 3. Action Bar (Directly inside layout, tight and natural) */}
+        {/* 4. Action Bar (Directly inside layout, tight and natural) */}
         <div
           style={{
             backgroundColor: '#FFFFFF',
@@ -992,74 +1213,88 @@ export const NewScreeningPage: React.FC = () => {
             padding: '12px 20px',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'flex-end',
+            justifyContent: 'space-between',
             boxShadow: '0 1px 3px rgba(0, 0, 0, 0.03)',
+            flexWrap: 'wrap',
             gap: '12px',
             width: '100%',
             boxSizing: 'border-box',
           }}
         >
-          <button
-            type="button"
-            onClick={handleClear}
-            style={{
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #D1D5DB',
-              color: '#374151',
-              borderRadius: '8px',
-              padding: '8px 20px',
-              fontSize: '13px',
-              fontWeight: 600,
-              cursor: 'pointer',
-              transition: 'all 0.15s ease',
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#F9FAFB')}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#FFFFFF')}
-          >
-            Clear
-          </button>
+          {/* Helper message indicating completion status */}
+          <div style={{ fontSize: '12px', color: isFormValid ? '#059669' : '#6B7280' }}>
+            {isFormValid
+              ? screeningMethod === 'manual'
+                ? 'All required customer details provided.'
+                : `${documents.length} ${documents.length === 1 ? 'document' : 'documents'} ready for extraction.`
+              : screeningMethod === 'manual'
+              ? 'Complete all 4 required fields to run check.'
+              : 'Upload at least 1 document to run check.'}
+          </div>
 
-          <button
-            type="button"
-            onClick={handleRunCheck}
-            disabled={isSubmitting}
-            style={{
-              backgroundColor: '#831B84',
-              border: 'none',
-              color: '#FFFFFF',
-              borderRadius: '8px',
-              padding: '8px 22px',
-              fontSize: '13px',
-              fontWeight: 600,
-              cursor: isSubmitting ? 'not-allowed' : 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              boxShadow: '0 1px 3px rgba(131, 27, 132, 0.3)',
-              transition: 'background-color 0.15s ease',
-              opacity: isSubmitting ? 0.7 : 1,
-            }}
-            onMouseEnter={(e) => {
-              if (!isSubmitting) e.currentTarget.style.backgroundColor = '#6A146B';
-            }}
-            onMouseLeave={(e) => {
-              if (!isSubmitting) e.currentTarget.style.backgroundColor = '#831B84';
-            }}
-          >
-            <ShieldCheck size={16} />
-            <span>{isSubmitting ? 'Screening...' : 'Run sanctions check'}</span>
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <button
+              type="button"
+              onClick={handleClear}
+              style={{
+                backgroundColor: '#FFFFFF',
+                border: '1px solid #D1D5DB',
+                color: '#374151',
+                borderRadius: '8px',
+                padding: '8px 20px',
+                fontSize: '13px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#F9FAFB')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#FFFFFF')}
+            >
+              Clear
+            </button>
+
+            <button
+              type="button"
+              onClick={handleRunCheck}
+              disabled={isSubmitting || !isFormValid}
+              style={{
+                backgroundColor: isFormValid && !isSubmitting ? '#831B84' : '#9CA3AF',
+                border: 'none',
+                color: '#FFFFFF',
+                borderRadius: '8px',
+                padding: '8px 22px',
+                fontSize: '13px',
+                fontWeight: 600,
+                cursor: isSubmitting || !isFormValid ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                boxShadow: isFormValid && !isSubmitting ? '0 1px 3px rgba(131, 27, 132, 0.3)' : 'none',
+                transition: 'all 0.15s ease',
+                opacity: isSubmitting ? 0.7 : 1,
+              }}
+              onMouseEnter={(e) => {
+                if (!isSubmitting && isFormValid) e.currentTarget.style.backgroundColor = '#6A146B';
+              }}
+              onMouseLeave={(e) => {
+                if (!isSubmitting && isFormValid) e.currentTarget.style.backgroundColor = '#831B84';
+              }}
+            >
+              <ShieldCheck size={16} />
+              <span>{isSubmitting ? 'Screening...' : 'Run sanctions check'}</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* 4. KYC Screening Progress Modal */}
+      {/* 5. KYC Screening Progress Modal */}
       <ScreeningProgressModal
         isOpen={isModalOpen}
         currentStage={currentStage}
-        customerName={fullName}
-        dob={normalizeDobToYmd(dob)}
-        nationality={nationality}
-        docCount={documents.length}
+        customerName={screeningMethod === 'manual' ? fullName : (documents[0]?.name || 'Document Screening')}
+        dob={screeningMethod === 'manual' ? normalizeDobToYmd(dob) : 'Auto-extract'}
+        nationality={screeningMethod === 'manual' ? nationality : `${documents.length} doc(s)`}
+        docCount={screeningMethod === 'manual' ? 0 : documents.length}
         errorMessage={modalError}
         onRetry={handleRetryScreening}
         onCancel={() => {

@@ -6,12 +6,11 @@ import {
   ArrowUpRight,
   ArrowRight,
   ArrowLeft,
-  Info,
   Filter,
   RotateCcw,
   History,
 } from 'lucide-react';
-import { kycService } from '../services/kycService';
+import { kycService, detectScreeningMethod } from '../services/kycService';
 import { KYC_AuditLogService } from '../generated/services/KYC_AuditLogService';
 import type { KYC_AuditLogRead } from '../generated/models/KYC_AuditLogModel';
 import type { KycCase, AuditLogEntry } from '../types/kyc';
@@ -37,19 +36,36 @@ function formatAuditTimestamp(isoStr: string): string {
 }
 
 /**
- * Formats ISO date string to "10:42" short time.
+ * Formats ISO date string to "21 Nov 2026, 22:55" date + time.
  */
-function formatShortTime(isoStr?: string | null): string {
+function formatCaseSummaryDateTime(isoStr?: string | null): string {
   if (!isoStr) return '—';
   try {
     const d = new Date(isoStr);
-    if (isNaN(d.getTime())) return '—';
+    if (isNaN(d.getTime())) return String(isoStr);
+    const day = d.getDate();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const month = months[d.getMonth()];
+    const year = d.getFullYear();
     const hours = String(d.getHours()).padStart(2, '0');
     const mins = String(d.getMinutes()).padStart(2, '0');
-    return `${hours}:${mins}`;
+    return `${day} ${month} ${year}, ${hours}:${mins}`;
   } catch {
-    return '—';
+    return String(isoStr);
   }
+}
+
+/**
+ * Normalizes and formats audit log details:
+ * Replaces literal escaped newline sequences ("\\n", "\\r\\n", "\\r") with real newline characters (\n)
+ * while preserving existing formatting and actual newlines, for display with CSS white-space: pre-line.
+ */
+export function formatAuditDetails(raw?: string | null): string {
+  if (!raw) return '';
+  return String(raw)
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\n');
 }
 
 export const AuditTrailPage: React.FC = () => {
@@ -432,6 +448,17 @@ export const AuditTrailPage: React.FC = () => {
   );
   const isPotentialMatch = caseData ? (caseData.checkResult === 'Potential Match' || hasMatchedEntry) : false;
   const reviewerDecision = caseData?.reviewerDecision || 'Pending review';
+
+  const isDocumentUpload = useMemo(() => {
+    if (!caseData) return false;
+    const method = detectScreeningMethod(caseData);
+    if (method === 'manual') return false;
+    if (method === 'documents' || method === 'document') return true;
+    return Boolean(
+      (caseData.documents && caseData.documents.length > 0) ||
+      (caseData.documentNames && caseData.documentNames.length > 0)
+    );
+  }, [caseData]);
 
   return (
     <div
@@ -900,8 +927,8 @@ export const AuditTrailPage: React.FC = () => {
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
                                   <span style={{ fontWeight: 600, color: '#4B5563', fontSize: '12px', flexShrink: 0 }}>Reviewer comment:</span>
-                                  <span style={{ color: '#111827', fontWeight: 500 }}>
-                                    {finalComm}
+                                  <span style={{ color: '#111827', fontWeight: 500, whiteSpace: 'pre-line' }}>
+                                    {formatAuditDetails(finalComm)}
                                   </span>
                                 </div>
                               </div>
@@ -915,9 +942,10 @@ export const AuditTrailPage: React.FC = () => {
                             fontSize: '12.5px',
                             color: '#374151',
                             lineHeight: '1.5',
+                            whiteSpace: 'pre-line',
                           }}
                         >
-                          {item.details}
+                          {formatAuditDetails(item.details)}
                         </p>
                       )}
 
@@ -982,41 +1010,43 @@ export const AuditTrailPage: React.FC = () => {
 
                 <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr' }}>
                   <span style={{ color: '#6B7280' }}>Checked</span>
-                  <span style={{ color: '#111827' }}>{formatShortTime(caseData?.checkedOn)}</span>
+                  <span style={{ color: '#111827' }}>{formatCaseSummaryDateTime(caseData?.checkedOn)}</span>
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr' }}>
                   <span style={{ color: '#6B7280' }}>Decided</span>
                   <span style={{ color: '#111827' }}>
-                    {caseData?.decidedOn ? formatShortTime(caseData.decidedOn) : '—'}
+                    {caseData?.decidedOn ? formatCaseSummaryDateTime(caseData.decidedOn) : '—'}
                   </span>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr' }}>
-                  <span style={{ color: '#6B7280' }}>Documents</span>
-                  <span
-                    onClick={() => {
-                      const rawLink = caseData?.documentsLink;
-                      const cid = selectedCaseId || caseData?.caseId || '';
-                      const targetUrl =
-                        rawLink && (rawLink.startsWith('http://') || rawLink.startsWith('https://'))
-                          ? rawLink
-                          : `https://xebiagroup.sharepoint.com/sites/QA/Shared%20Documents/${encodeURIComponent(cid)}`;
-                      window.open(targetUrl, '_blank');
-                    }}
-                    style={{
-                      color: '#831B84',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      textDecoration: 'none',
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
-                    onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
-                    title="Open case documents folder in SharePoint"
-                  >
-                    Case folder
-                  </span>
-                </div>
+                {isDocumentUpload && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr' }}>
+                    <span style={{ color: '#6B7280' }}>Documents</span>
+                    <span
+                      onClick={() => {
+                        const rawLink = caseData?.documentsLink;
+                        const cid = selectedCaseId || caseData?.caseId || '';
+                        const targetUrl =
+                          rawLink && (rawLink.startsWith('http://') || rawLink.startsWith('https://'))
+                            ? rawLink
+                            : `https://xebiagroup.sharepoint.com/sites/QA/Shared%20Documents/${encodeURIComponent(cid)}`;
+                        window.open(targetUrl, '_blank');
+                      }}
+                      style={{
+                        color: '#831B84',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        textDecoration: 'none',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
+                      onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
+                      title="Open case documents folder in SharePoint"
+                    >
+                      Case folder
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Back to Result Button */}
@@ -1045,24 +1075,6 @@ export const AuditTrailPage: React.FC = () => {
               >
                 <span>Back to result</span>
               </button>
-            </div>
-
-            {/* Read-Only Audit Info Callout Banner */}
-            <div
-              style={{
-                backgroundColor: '#EFF6FF',
-                border: '1px solid #BFDBFE',
-                borderRadius: '10px',
-                padding: '12px 14px',
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '8px',
-              }}
-            >
-              <Info size={16} color="#3B82F6" style={{ marginTop: '2px', flexShrink: 0 }} />
-              <span style={{ fontSize: '12px', color: '#1E40AF', lineHeight: '1.45' }}>
-                Audit entries are written only by server-side flows. Reviewers have read-only access to this log.
-              </span>
             </div>
           </div>
         </div>
@@ -1444,9 +1456,10 @@ export const AuditTrailPage: React.FC = () => {
                                   verticalAlign: 'top',
                                   color: '#374151',
                                   lineHeight: '1.45',
+                                  whiteSpace: 'pre-line',
                                 }}
                               >
-                                {log.details}
+                                {formatAuditDetails(log.details)}
                               </td>
 
                               {/* Performed By */}

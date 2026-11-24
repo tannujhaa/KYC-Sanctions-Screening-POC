@@ -40,10 +40,7 @@
       "workflowDetails": {
         "workflowEntityId": "7018108b-4ae3-f111-84e8-70a8a5a68669",
         "workflowDisplayName": "KYC - Screen Customer",
-        "workflowName": "3183a1c6-245f-8858-a9ab-d4065d2b8d74",
-        "dependencies": {
-          "shared_sharepointonline": "dda0832c-55c6-40c9-9932-52434218cd27"
-        }
+        "workflowName": "7018108b-4ae3-f111-84e8-70a8a5a68669"
       }
     },
     "5ea5993b-fb5f-4495-806c-6c6a0e533112": {

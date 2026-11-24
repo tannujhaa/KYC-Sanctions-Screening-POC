@@ -51,6 +51,7 @@ export const StackedBarChart: React.FC<StackedBarChartProps> = ({
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
+        maxHeight: '300px',
         boxSizing: 'border-box',
       }}
       aria-label={ariaSummary}

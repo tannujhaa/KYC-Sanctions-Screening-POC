@@ -8,7 +8,13 @@ import {
   History,
   RotateCcw,
 } from 'lucide-react';
-import { kycService, parseDocumentValidationDetails } from '../services/kycService';
+import {
+  kycService,
+  parseDocumentValidationDetails,
+  extractCustomerFromDocDetails,
+  detectScreeningMethod,
+  extractDocumentNamesFromDocDetails,
+} from '../services/kycService';
 import { KYC_CasesService } from '../generated/services/KYC_CasesService';
 import type { KYC_CasesRead } from '../generated/models/KYC_CasesModel';
 import type { KycCase, CheckResult, ReviewerDecision } from '../types/kyc';
@@ -109,12 +115,58 @@ function mapSharePointCase(item: KYC_CasesRead): KycCase {
   const parsedDocDetails = parseDocumentValidationDetails(rawDocDetails);
   const docStatus = (rawDocStatus || parsedDocDetails?.overallValidationStatus || null) as any;
 
+  // Extract customer details from DocumentValidationDetails if available
+  const extracted = extractCustomerFromDocDetails(parsedDocDetails);
+
+  const rawCustomerName = (
+    item.CustomerName ||
+    (item as any).Customer_x0020_Name ||
+    (item as any)['Customer Name'] ||
+    (item as any).customerName ||
+    (item as any).customername ||
+    (item as any).FullName ||
+    ''
+  ).trim();
+
+  // If customer name equals the Case ID (e.g. from SharePoint Title) or starts with KYC-, do not use it!
+  const isNameCaseId = rawCustomerName.startsWith('KYC-') || (caseId && rawCustomerName.toLowerCase() === caseId.toLowerCase());
+  const resolvedCustomerName =
+    (!isNameCaseId && rawCustomerName && rawCustomerName !== 'Unknown Customer' && rawCustomerName !== 'Not available')
+      ? rawCustomerName
+      : extracted.name || 'Not available';
+
+  const rawNat = (item.Nationality || (item as any).nationality || '').trim();
+  const resolvedNationality = (rawNat && rawNat !== 'Not available' ? rawNat : '') || extracted.nationality || 'Not available';
+
+  const rawDob = (item.DOB || (item as any).dob || '').trim();
+  const resolvedDob = (rawDob && rawDob !== 'Not available' ? rawDob : '') || extracted.dob || 'Not available';
+
+  const rawAddress = (item.Address || (item as any).address || '').trim();
+  const resolvedAddress = (rawAddress && rawAddress !== 'Not available' ? rawAddress : '') || extracted.address || 'Not available';
+
+  const extractedDocNames = extractDocumentNamesFromDocDetails(parsedDocDetails);
+
+  const detectedMethod = detectScreeningMethod({
+    caseId,
+    customerName: resolvedCustomerName,
+    dob: resolvedDob,
+    nationality: resolvedNationality,
+    address: resolvedAddress,
+    checkResult,
+    reviewerDecision,
+    checkedOn: item.CheckedOn || item.Created || new Date().toISOString(),
+    createdAt: item.Created || item.CheckedOn || new Date().toISOString(),
+    documentNames: extractedDocNames,
+    documentValidationStatus: docStatus,
+    documentValidationDetails: parsedDocDetails,
+  });
+
   return {
     caseId,
-    customerName: item.CustomerName || item.Title || 'Unknown Customer',
-    dob: item.DOB || '',
-    nationality: item.Nationality || '',
-    address: item.Address || '',
+    customerName: resolvedCustomerName,
+    dob: resolvedDob,
+    nationality: resolvedNationality,
+    address: resolvedAddress,
     checkResult,
     matchedEntry: item.MatchedEntry || null,
     matchReason: item.MatchReason || null,
@@ -124,10 +176,11 @@ function mapSharePointCase(item: KYC_CasesRead): KycCase {
     checkedOn: item.CheckedOn || item.Created || new Date().toISOString(),
     decidedOn: item.DecidedOn || null,
     documentsLink: item.DocumentsLink || `/documents/${caseId}`,
-    documentNames: [],
+    documentNames: extractedDocNames,
     documentValidationStatus: docStatus,
     documentValidationDetails: parsedDocDetails,
     documentValidationDate: rawDocDate,
+    screeningMethod: detectedMethod,
     createdAt: item.Created || item.CheckedOn || new Date().toISOString(),
   };
 }
@@ -682,7 +735,12 @@ export const ScreeningCasesPage: React.FC = () => {
                                 type="button"
                                 onClick={() => {
                                   setOpenMenuCaseId(null);
-                                  navigate(`/result/${encodeURIComponent(c.caseId)}`);
+                                  navigate(`/result/${encodeURIComponent(c.caseId)}`, {
+                                    state: {
+                                      screeningResult: c,
+                                      screeningMethod: c.screeningMethod,
+                                    },
+                                  });
                                 }}
                                 style={{
                                   width: '100%',

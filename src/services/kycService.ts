@@ -10,6 +10,7 @@ import type {
   DocumentPayloadItem,
   DocumentValidationStatus,
   DocumentValidationDetails,
+  ScreeningMethod,
 } from '../types/kyc';
 import { getContext } from '@microsoft/power-apps/app';
 import { KYC_ScreenCustomerService } from '../generated/services/KYC_ScreenCustomerService';
@@ -68,27 +69,53 @@ export function normalizeDobToYmd(val: string): string {
  * Handles null, empty strings, objects, and malformed JSON gracefully without throwing.
  */
 export function parseDocumentValidationDetails(
-  rawDetails?: string | DocumentValidationDetails | null
+  rawDetails?: any
 ): DocumentValidationDetails | null {
   if (!rawDetails) return null;
-  if (typeof rawDetails === 'object') return rawDetails;
-  if (typeof rawDetails !== 'string') return null;
+  let target = rawDetails;
+  if (typeof target === 'object' && target !== null) {
+    if (target.item && typeof target.item === 'object') {
+      target = target.item;
+    } else if (target.Value && typeof target.Value === 'string') {
+      target = target.Value;
+    } else {
+      return target as DocumentValidationDetails;
+    }
+  }
+  if (typeof target !== 'string') return null;
 
-  const trimmed = rawDetails.trim();
+  let trimmed = target.trim();
   if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return null;
 
+  // 1. Strip HTML tags like <p>, </p>, <pre>, </pre> if Power Automate formatted output
+  if (trimmed.includes('<') && trimmed.includes('>')) {
+    trimmed = trimmed.replace(/<\/?[^>]+(>|$)/g, '').trim();
+  }
+
+  // 2. Strip Markdown code block fences e.g. ```json ... ``` or ``` ... ```
+  if (trimmed.includes('```')) {
+    trimmed = trimmed.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+  }
+
+  // 3. If wrapped in outer narrative/text from an LLM prompt, isolate the JSON substring
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    trimmed = trimmed.substring(firstBrace, lastBrace + 1);
+  }
+
   try {
-    const parsed = JSON.parse(trimmed);
+    let parsed = JSON.parse(trimmed);
+    if (typeof parsed === 'string') {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        return { overallRemarks: parsed };
+      }
+    }
     if (typeof parsed === 'object' && parsed !== null) {
-      if (typeof parsed === 'string') {
-        try {
-          const secondParse = JSON.parse(parsed);
-          if (typeof secondParse === 'object' && secondParse !== null) {
-            return secondParse as DocumentValidationDetails;
-          }
-        } catch {
-          return { overallRemarks: parsed };
-        }
+      if ((parsed as any).item && typeof (parsed as any).item === 'object') {
+        parsed = (parsed as any).item;
       }
       return parsed as DocumentValidationDetails;
     }
@@ -99,6 +126,263 @@ export function parseDocumentValidationDetails(
       overallRemarks: trimmed,
     };
   }
+}
+
+/**
+ * Helper to extract customer details (name, dob, nationality, address) from
+ * DocumentValidationDetails JSON produced by OCR / AI document extraction.
+ */
+export function extractCustomerFromDocDetails(
+  parsedDetails?: DocumentValidationDetails | string | null
+): { name: string; dob: string; nationality: string; address: string } {
+  if (!parsedDetails) return { name: '', dob: '', nationality: '', address: '' };
+
+  const details = typeof parsedDetails === 'string'
+    ? parseDocumentValidationDetails(parsedDetails)
+    : parsedDetails;
+
+  if (!details || typeof details !== 'object') {
+    return { name: '', dob: '', nationality: '', address: '' };
+  }
+
+  let name = '';
+  let dob = '';
+  let nationality = '';
+  let address = '';
+
+  const isValidValue = (v: any): boolean => {
+    if (v == null) return false;
+    const str = String(v).trim();
+    return str !== '' && str !== '—' && str !== '-' && str !== 'null' && str !== 'undefined' && str !== 'Not available' && str !== 'Customer';
+  };
+
+  // 1. Inspect customerDataValidation array
+  let rawVal: any =
+    details.customerDataValidation ||
+    (details as any).CustomerDataValidation ||
+    (details as any).customer_data_validation ||
+    (details as any).fieldValidation ||
+    (details as any).comparisons ||
+    (details as any).validationResults;
+
+  if (rawVal && typeof rawVal === 'object' && !Array.isArray(rawVal) && (rawVal as any).item) {
+    rawVal = (rawVal as any).item;
+  }
+  if (!Array.isArray(rawVal) && rawVal && typeof rawVal === 'object') {
+    rawVal = [rawVal];
+  }
+
+  if (Array.isArray(rawVal)) {
+    for (const rawItem of rawVal) {
+      const item = rawItem?.item && typeof rawItem.item === 'object' ? rawItem.item : rawItem;
+      const field = String(item?.field || item?.fieldName || item?.name || '').toLowerCase();
+      const extracted = String(
+        item?.extractedValue ??
+        item?.extracted ??
+        item?.documentExtracted ??
+        item?.docExtracted ??
+        item?.documentValue ??
+        item?.value ??
+        ''
+      ).trim();
+
+      if (!isValidValue(extracted)) continue;
+
+      if (!name && (field.includes('name') || field.includes('customer'))) {
+        if (!extracted.startsWith('KYC-')) name = extracted;
+      } else if (!dob && (field.includes('dob') || field.includes('birth'))) {
+        dob = extracted;
+      } else if (!nationality && (field.includes('nation') || field.includes('country') || field.includes('citizen'))) {
+        nationality = extracted;
+      } else if (!address && field.includes('address')) {
+        address = extracted;
+      }
+    }
+  }
+
+  // 2. Inspect extractedData object or details root properties
+  const extObj =
+    (details as any).extractedData ||
+    (details as any).ExtractedData ||
+    (details as any).extractedFields ||
+    (details as any).customerData ||
+    details;
+
+  if (typeof extObj === 'object' && extObj !== null) {
+    if (!name) {
+      const n = extObj.fullName || extObj.FullName || extObj.customerName || extObj.CustomerName || extObj.name || extObj.Name || (details as any).extractedFullName;
+      if (isValidValue(n) && !String(n).startsWith('KYC-')) name = String(n).trim();
+    }
+    if (!dob) {
+      const d = extObj.dob || extObj.DOB || extObj.dateOfBirth || extObj.DateOfBirth || (details as any).extractedDOB;
+      if (isValidValue(d)) dob = String(d).trim();
+    }
+    if (!nationality) {
+      const nat = extObj.nationality || extObj.Nationality || (details as any).extractedNationality;
+      if (isValidValue(nat)) nationality = String(nat).trim();
+    }
+    if (!address) {
+      const a = extObj.address || extObj.Address || (details as any).extractedAddress;
+      if (isValidValue(a)) address = String(a).trim();
+    }
+  }
+
+  // 3. Inspect documents array if individual doc has extracted fields
+  const docs = details.documents || (details as any).Documents;
+  if (Array.isArray(docs)) {
+    for (const d of docs) {
+      const docObj = d?.extractedData || d?.fields || d;
+      if (!name && isValidValue(docObj?.fullName || docObj?.customerName || docObj?.name)) {
+        const n = String(docObj.fullName || docObj.customerName || docObj.name).trim();
+        if (!n.startsWith('KYC-')) name = n;
+      }
+      if (!dob && isValidValue(docObj?.dob || docObj?.dateOfBirth)) {
+        dob = String(docObj.dob || docObj.dateOfBirth).trim();
+      }
+      if (!nationality && isValidValue(docObj?.nationality)) {
+        nationality = String(docObj.nationality).trim();
+      }
+      if (!address && isValidValue(docObj?.address)) {
+        address = String(docObj.address).trim();
+      }
+    }
+  }
+
+  return { name, dob, nationality, address };
+}
+
+/**
+ * Helper to extract document names from DocumentValidationDetails JSON produced by OCR / AI document extraction.
+ */
+export function extractDocumentNamesFromDocDetails(
+  parsedDetails?: DocumentValidationDetails | string | null
+): string[] {
+  if (!parsedDetails) return [];
+  const details = typeof parsedDetails === 'string'
+    ? parseDocumentValidationDetails(parsedDetails)
+    : parsedDetails;
+  if (!details || typeof details !== 'object') return [];
+
+  let rawDocs: any =
+    details.documents ||
+    (details as any).Documents ||
+    (details as any).uploadedDocuments ||
+    (details as any).UploadedDocuments ||
+    (details as any).documentList ||
+    (details as any).DocumentList ||
+    (details as any).extractedDocuments;
+
+  if (rawDocs && typeof rawDocs === 'object' && !Array.isArray(rawDocs) && (rawDocs as any).item) {
+    rawDocs = (rawDocs as any).item;
+  }
+  if (!Array.isArray(rawDocs) && rawDocs && typeof rawDocs === 'object') {
+    rawDocs = [rawDocs];
+  }
+
+  if (Array.isArray(rawDocs)) {
+    return rawDocs
+      .map((d: any, idx: number) => {
+        const item = d?.item && typeof d.item === 'object' ? d.item : d;
+        if (typeof item === 'string') return item.trim();
+        return (item?.name || item?.fileName || item?.documentName || `Document ${idx + 1}`).trim();
+      })
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+/**
+ * Safely and deterministically detects whether a case was created using
+ * 'manual' entry or 'documents' upload based on navigation state, case properties,
+ * and persisted SharePoint/mock case data.
+ */
+export function detectScreeningMethod(
+  caseData?: KycCase | null,
+  explicitMethod?: ScreeningMethod | null
+): ScreeningMethod {
+  const normExplicit = String(explicitMethod || '').trim().toLowerCase();
+  const normCaseMethod = String(caseData?.screeningMethod || '').trim().toLowerCase();
+
+  // If caseData is provided, inspect caseData to verify whether actual documents exist
+  if (caseData) {
+    // 1. Check for presence of document upload payloads or filenames
+    const extractedDocNames = extractDocumentNamesFromDocDetails(caseData.documentValidationDetails);
+    const hasDocuments = Boolean(
+      (caseData.documents && caseData.documents.length > 0) ||
+      (caseData.documentNames && caseData.documentNames.length > 0) ||
+      (extractedDocNames.length > 0)
+    );
+
+    // 2. Inspect parsed document validation details
+    const details =
+      typeof caseData.documentValidationDetails === 'string'
+        ? parseDocumentValidationDetails(caseData.documentValidationDetails)
+        : caseData.documentValidationDetails;
+
+    let rawDocs: any =
+      details?.documents ||
+      (details as any)?.Documents ||
+      (details as any)?.uploadedDocuments ||
+      (details as any)?.UploadedDocuments ||
+      (details as any)?.extractedDocuments;
+
+    if (rawDocs && typeof rawDocs === 'object' && !Array.isArray(rawDocs) && (rawDocs as any).item) {
+      rawDocs = (rawDocs as any).item;
+    }
+    const hasDocsInValidation = Array.isArray(rawDocs) && rawDocs.length > 0;
+
+    // 3. Inspect DocumentValidationStatus:
+    // Power Automate returns "Not Applicable" or "N/A" for manual cases without documents!
+    const rawStatus = String(
+      caseData.documentValidationStatus ||
+      details?.overallValidationStatus ||
+      ''
+    ).trim().toLowerCase();
+
+    const isNotApplicable =
+      rawStatus === '' ||
+      rawStatus === 'none' ||
+      rawStatus === 'null' ||
+      rawStatus === 'undefined' ||
+      rawStatus.includes('not applicable') ||
+      rawStatus.includes('not_applicable') ||
+      rawStatus === 'n/a' ||
+      rawStatus === 'na' ||
+      rawStatus.includes('not required');
+
+    const hasRealValidationStatus = !isNotApplicable && (
+      rawStatus.includes('pass') ||
+      rawStatus.includes('fail') ||
+      rawStatus.includes('review') ||
+      rawStatus.includes('warn') ||
+      rawStatus.includes('match')
+    );
+
+    // 4. Inspect OCR extracted customer details
+    const extracted = extractCustomerFromDocDetails(details);
+    const hasExtractedInfo = Boolean(
+      extracted.name || extracted.dob || extracted.nationality || extracted.address
+    );
+
+    // If caseData has NO documents and NO docs in validation and NO extracted info, it is DEFINITIVELY manual!
+    if (!hasDocuments && !hasDocsInValidation && (!hasRealValidationStatus || !hasExtractedInfo)) {
+      return 'manual';
+    }
+
+    // If actual documents or actual document extractions exist, it is 'documents'
+    if (hasDocuments || hasDocsInValidation || (hasRealValidationStatus && hasExtractedInfo)) {
+      return 'documents';
+    }
+  }
+
+  // Fallback to explicit methods if caseData is not available
+  if (normExplicit === 'manual') return 'manual';
+  if (normExplicit === 'documents' || normExplicit === 'document') return 'documents';
+  if (normCaseMethod === 'manual') return 'manual';
+  if (normCaseMethod === 'documents' || normCaseMethod === 'document') return 'documents';
+
+  return 'manual';
 }
 
 export interface IKycService {
@@ -114,6 +398,7 @@ export interface IKycService {
       address: string;
       documents?: DocumentPayloadItem[];
       documentNames?: string[];
+      screeningMethod?: ScreeningMethod;
     },
     onProgress?: (progress: ScreeningProgress) => void
   ): Promise<{
@@ -125,6 +410,13 @@ export interface IKycService {
     documentsLink?: string | null;
     documentValidationStatus?: DocumentValidationStatus | string | null;
     documentValidationDetails?: DocumentValidationDetails | string | null;
+    customerName?: string;
+    dob?: string;
+    nationality?: string;
+    address?: string;
+    screeningMethod?: ScreeningMethod;
+    documentNames?: string[];
+    documents?: DocumentPayloadItem[];
   }>;
   recordDecision(
     caseId: string,
@@ -1032,6 +1324,14 @@ const SEED_AUDIT_LOGS: AuditLogEntry[] = [
     timestamp: '2026-11-18T10:42:09Z',
   },
   {
+    id: 'LOG-007-2B',
+    caseId: 'KYC-0007',
+    event: 'Document Validation Completed' as any,
+    details: 'Document Validation Status: Pass\\nValidation Remarks: []',
+    performedBy: 'AI Document Extractor',
+    timestamp: '2026-11-18T10:42:08Z',
+  },
+  {
     id: 'LOG-007-3',
     caseId: 'KYC-0007',
     event: 'Decision Recorded',
@@ -1145,6 +1445,7 @@ export class MockKycService implements IKycService {
       address: string;
       documents?: DocumentPayloadItem[];
       documentNames?: string[];
+      screeningMethod?: ScreeningMethod;
     },
     onProgress?: (progress: ScreeningProgress) => void
   ): Promise<{
@@ -1156,6 +1457,11 @@ export class MockKycService implements IKycService {
     documentsLink?: string | null;
     documentValidationStatus?: DocumentValidationStatus | string | null;
     documentValidationDetails?: DocumentValidationDetails | string | null;
+    customerName?: string;
+    dob?: string;
+    nationality?: string;
+    address?: string;
+    screeningMethod?: ScreeningMethod;
   }> {
     const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const newCaseNumber = this.cases.length + 1;
@@ -1165,6 +1471,13 @@ export class MockKycService implements IKycService {
     const resolvedDocNames =
       customer.documentNames ||
       (customer.documents ? customer.documents.map((d) => d.name) : []);
+
+    const screeningMethod: ScreeningMethod =
+      customer.screeningMethod ||
+      ((customer.documents && customer.documents.length > 0) ||
+       (customer.documentNames && customer.documentNames.length > 0)
+        ? 'documents'
+        : 'manual');
 
     // Stage 1: Creating case
     onProgress?.({ stage: 'creating_case' });
@@ -1187,10 +1500,23 @@ export class MockKycService implements IKycService {
     onProgress?.({ stage: 'screening', caseId });
     await delay(900);
 
+    const customerName =
+      customer.customerName ||
+      (resolvedDocNames[0]?.toLowerCase().includes('gourav')
+        ? 'Gourav Kumar'
+        : resolvedDocNames[0]?.toLowerCase().includes('markus')
+        ? 'Markus Thorn'
+        : resolvedDocNames[0]?.toLowerCase().includes('elena')
+        ? 'Elena Markovic'
+        : resolvedDocNames[0]?.replace(/\.[^/.]+$/, '').replace(/Specimen_ID_|Specimen_Passport_/gi, '').replace(/_/g, ' ') || 'Document Extracted Customer');
+    const dob = customer.dob || '1982-11-03';
+    const nationality = customer.nationality || 'German';
+    const address = customer.address || 'Mock Address';
+
     const screeningResult = screenAgainstSanctions(
-      customer.customerName,
-      customer.dob,
-      customer.nationality,
+      customerName,
+      dob,
+      nationality,
       this.sanctionsList
     );
 
@@ -1204,10 +1530,10 @@ export class MockKycService implements IKycService {
 
     const newCase: KycCase = {
       caseId,
-      customerName: customer.customerName,
-      dob: customer.dob,
-      nationality: customer.nationality,
-      address: customer.address,
+      customerName,
+      dob,
+      nationality,
+      address,
       checkResult: screeningResult.checkResult,
       matchedEntry: screeningResult.matchedEntry,
       matchReason: screeningResult.matchReason,
@@ -1218,6 +1544,7 @@ export class MockKycService implements IKycService {
       createdAt: nowIso,
       documentNames: resolvedDocNames,
       documentsLink: `/documents/${caseId}`,
+      screeningMethod,
     };
 
     this.cases.unshift(newCase);
@@ -1246,6 +1573,7 @@ export class MockKycService implements IKycService {
       documentsLink: `/documents/${caseId}`,
       documentValidationStatus: null,
       documentValidationDetails: null,
+      screeningMethod,
     };
   }
 
@@ -1522,12 +1850,58 @@ export function mapKycCaseReadToKycCase(item: KYC_CasesRead): KycCase {
   const parsedDocDetails = parseDocumentValidationDetails(rawDocDetails);
   const docStatus = (rawDocStatus || parsedDocDetails?.overallValidationStatus || null) as DocumentValidationStatus | null;
 
+  // Extract customer details from DocumentValidationDetails if available
+  const extracted = extractCustomerFromDocDetails(parsedDocDetails);
+
+  const rawCustomerName = (
+    item.CustomerName ||
+    (item as any).Customer_x0020_Name ||
+    (item as any)['Customer Name'] ||
+    (item as any).customerName ||
+    (item as any).customername ||
+    (item as any).FullName ||
+    ''
+  ).trim();
+
+  // If customer name equals the Case ID (e.g. from SharePoint Title) or starts with KYC-, do not use it!
+  const isNameCaseId = rawCustomerName.startsWith('KYC-') || (caseId && rawCustomerName.toLowerCase() === caseId.toLowerCase());
+  const resolvedCustomerName =
+    (!isNameCaseId && rawCustomerName && rawCustomerName !== 'Unknown Customer' && rawCustomerName !== 'Not available')
+      ? rawCustomerName
+      : extracted.name || 'Not available';
+
+  const rawNat = (item.Nationality || (item as any).nationality || '').trim();
+  const resolvedNationality = (rawNat && rawNat !== 'Not available' ? rawNat : '') || extracted.nationality || 'Not available';
+
+  const rawDob = (item.DOB || (item as any).dob || '').trim();
+  const resolvedDob = (rawDob && rawDob !== 'Not available' ? rawDob : '') || extracted.dob || 'Not available';
+
+  const rawAddress = (item.Address || (item as any).address || '').trim();
+  const resolvedAddress = (rawAddress && rawAddress !== 'Not available' ? rawAddress : '') || extracted.address || 'Not available';
+
+  const extractedDocNames = extractDocumentNamesFromDocDetails(parsedDocDetails);
+
+  const detectedMethod = detectScreeningMethod({
+    caseId,
+    customerName: resolvedCustomerName,
+    dob: resolvedDob,
+    nationality: resolvedNationality,
+    address: resolvedAddress,
+    checkResult,
+    reviewerDecision,
+    checkedOn: item.CheckedOn || item.Created || new Date().toISOString(),
+    createdAt: item.Created || item.CheckedOn || new Date().toISOString(),
+    documentNames: extractedDocNames,
+    documentValidationStatus: docStatus,
+    documentValidationDetails: parsedDocDetails,
+  });
+
   return {
     caseId,
-    customerName: item.CustomerName || item.Title || 'Unknown Customer',
-    dob: item.DOB || '',
-    nationality: item.Nationality || '',
-    address: item.Address || '',
+    customerName: resolvedCustomerName,
+    dob: resolvedDob,
+    nationality: resolvedNationality,
+    address: resolvedAddress,
     checkResult,
     matchedEntry: item.MatchedEntry || null,
     matchReason: item.MatchReason || null,
@@ -1537,10 +1911,11 @@ export function mapKycCaseReadToKycCase(item: KYC_CasesRead): KycCase {
     checkedOn: item.CheckedOn || item.Created || new Date().toISOString(),
     decidedOn: item.DecidedOn || null,
     documentsLink: item.DocumentsLink || `/documents/${caseId}`,
-    documentNames: [],
+    documentNames: extractedDocNames,
     documentValidationStatus: docStatus,
     documentValidationDetails: parsedDocDetails,
     documentValidationDate: rawDocDate,
+    screeningMethod: detectedMethod,
     createdAt: item.Created || item.CheckedOn || new Date().toISOString(),
   };
 }
@@ -1660,6 +2035,7 @@ export class PowerKycService implements IKycService {
       address: string;
       documents?: DocumentPayloadItem[];
       documentNames?: string[];
+      screeningMethod?: ScreeningMethod;
     },
     onProgress?: (progress: ScreeningProgress) => void
   ) {
@@ -1745,12 +2121,46 @@ export class PowerKycService implements IKycService {
       const parsedValidationDetails = parseDocumentValidationDetails(rawDocValidationDetails);
       const docValidationStatus = (rawDocValidationStatus || parsedValidationDetails?.overallValidationStatus || null) as DocumentValidationStatus | null;
 
+      const extractedCustomer = extractCustomerFromDocDetails(parsedValidationDetails);
+      const isManualNameValid = customer.customerName && !customer.customerName.startsWith('KYC-') && customer.customerName !== caseId;
+      const resolvedCustomerName =
+        (isManualNameValid ? customer.customerName : '') ||
+        (data as any).customername ||
+        (data as any).CustomerName ||
+        extractedCustomer.name ||
+        'Not available';
+
+      const resolvedDob =
+        (customer.dob && customer.dob !== 'Not available' ? customer.dob : '') ||
+        (data as any).dob ||
+        (data as any).DOB ||
+        extractedCustomer.dob ||
+        'Not available';
+
+      const resolvedNationality =
+        (customer.nationality && customer.nationality !== 'Not available' ? customer.nationality : '') ||
+        (data as any).nationality ||
+        (data as any).Nationality ||
+        extractedCustomer.nationality ||
+        'Not available';
+
+      const resolvedAddress =
+        (customer.address && customer.address !== 'Not available' ? customer.address : '') ||
+        (data as any).address ||
+        (data as any).Address ||
+        extractedCustomer.address ||
+        'Not available';
+
+      const screeningMethod: ScreeningMethod =
+        customer.screeningMethod ||
+        (customer.documents && customer.documents.length > 0 ? 'documents' : 'manual');
+
       const newCase: KycCase = {
         caseId,
-        customerName: customer.customerName,
-        dob: customer.dob,
-        nationality: customer.nationality,
-        address: customer.address,
+        customerName: resolvedCustomerName,
+        dob: resolvedDob,
+        nationality: resolvedNationality,
+        address: resolvedAddress,
         checkResult,
         matchedEntry,
         matchReason,
@@ -1763,6 +2173,7 @@ export class PowerKycService implements IKycService {
         documentValidationStatus: docValidationStatus,
         documentValidationDetails: parsedValidationDetails,
         documentValidationDate: new Date().toISOString(),
+        screeningMethod,
       };
 
       this.mockFallback.addCaseDirectly(newCase);
@@ -1777,6 +2188,13 @@ export class PowerKycService implements IKycService {
         documentsLink,
         documentValidationStatus: docValidationStatus,
         documentValidationDetails: parsedValidationDetails,
+        customerName: resolvedCustomerName,
+        dob: resolvedDob,
+        nationality: resolvedNationality,
+        address: resolvedAddress,
+        screeningMethod,
+        documentNames: resolvedDocNames.length > 0 ? resolvedDocNames : extractDocumentNamesFromDocDetails(parsedValidationDetails),
+        documents: customer.documents,
       };
     } catch (flowErr: any) {
       console.error('[Power Automate] Live screening flow failed:', flowErr);

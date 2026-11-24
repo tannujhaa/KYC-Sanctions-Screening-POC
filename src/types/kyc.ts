@@ -3,6 +3,8 @@ export interface DocumentPayloadItem {
   contentBytes: string;
 }
 
+export type ScreeningMethod = 'manual' | 'documents' | 'document';
+
 export interface ScreenCustomerInput {
   customerName: string;
   dob: string;
@@ -10,6 +12,7 @@ export interface ScreenCustomerInput {
   address: string;
   documents?: DocumentPayloadItem[];
   documentNames?: string[];
+  screeningMethod?: ScreeningMethod;
 }
 
 export interface SanctionsEntry {
@@ -112,6 +115,7 @@ export interface KycCase {
   documentValidationStatus?: DocumentValidationStatus | string | null;
   documentValidationDetails?: DocumentValidationDetails | string | null;
   documentValidationDate?: string | null;
+  screeningMethod?: ScreeningMethod;
   createdAt: string; // ISO format or date string
 }
 

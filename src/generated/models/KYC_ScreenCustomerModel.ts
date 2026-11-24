@@ -5,15 +5,15 @@
 
 export interface ManualTriggerInput {
   // Please enter your input
-  text: string;
+  text?: string;
   // Please enter your input
-  text_1: string;
+  text_1?: string;
   // Please enter your input
-  text_2: string;
+  text_2?: string;
   // Please enter your input
-  text_3: string;
+  text_3?: string;
   // Please enter your input
-  text_4: string;
+  text_4?: string;
   // Please enter your input
   text_5: string;
 }
@@ -27,12 +27,5 @@ export interface ResponseActionOutput {
   documentslink?: string;
   documentvalidationstatus?: string;
   documentvalidationdetails?: string;
-  CaseID?: string;
-  CheckResult?: string;
-  MatchedEntry?: string;
-  MatchReason?: string;
-  MatchType?: string;
-  DocumentsLink?: string;
-  DocumentValidationStatus?: string;
-  DocumentValidationDetails?: string;
+  documentvalidationdate?: string;
 }

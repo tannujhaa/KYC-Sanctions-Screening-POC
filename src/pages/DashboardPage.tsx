@@ -396,6 +396,7 @@ export const DashboardPage: React.FC = () => {
           gridTemplateColumns: 'minmax(0, 1.6fr) minmax(320px, 1fr)',
           gap: '20px',
           width: '100%',
+          alignItems: 'start',
         }}
       >
         {/* Screenings Per Day Stacked Bar Chart */}

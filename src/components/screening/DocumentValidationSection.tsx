@@ -34,14 +34,55 @@ interface DocumentValidationSectionProps {
     address: string;
   };
   fallbackDocumentNames?: string[];
+  isDocumentOnly?: boolean;
+}
+
+/**
+ * Safely converts any value (including objects with { item }, { Value }, arrays, etc.) to a string
+ * so React will never crash with "Objects are not valid as a React child".
+ */
+export function safeRenderText(val: any, fallback: string = '—'): string {
+  if (val == null) return fallback;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    return trimmed !== '' ? trimmed : fallback;
+  }
+  if (typeof val === 'number' || typeof val === 'boolean') {
+    return String(val);
+  }
+  if (typeof val === 'object') {
+    if (val.item != null) return safeRenderText(val.item, fallback);
+    if (val.Value != null) return safeRenderText(val.Value, fallback);
+    if (val.value != null) return safeRenderText(val.value, fallback);
+    if (val.name != null) return safeRenderText(val.name, fallback);
+    if (val.label != null) return safeRenderText(val.label, fallback);
+    if (Array.isArray(val)) {
+      const items = val.map((v) => safeRenderText(v, '')).filter(Boolean);
+      return items.length > 0 ? items.join(', ') : fallback;
+    }
+    try {
+      return JSON.stringify(val);
+    } catch {
+      return fallback;
+    }
+  }
+  return String(val);
 }
 
 /**
  * Normalizes status strings to 'Pass' | 'Fail' | 'Needs Review' | 'Unknown'
  */
-function normalizeStatus(raw?: string | null): 'Pass' | 'Fail' | 'Needs Review' | 'Unknown' {
+function normalizeStatus(raw?: any): 'Pass' | 'Fail' | 'Needs Review' | 'Unknown' {
   if (!raw) return 'Unknown';
-  const norm = raw.trim().toLowerCase();
+  let str = '';
+  if (typeof raw === 'string') {
+    str = raw;
+  } else if (typeof raw === 'object' && raw !== null) {
+    str = raw.Value || raw.value || raw.Title || raw.name || raw.label || '';
+  } else {
+    str = String(raw);
+  }
+  const norm = str.trim().toLowerCase();
   if (norm === 'pass' || norm === 'passed' || norm === 'match' || norm === 'matched' || norm === 'verified' || norm === 'valid') {
     return 'Pass';
   }
@@ -64,9 +105,13 @@ function normalizeStatus(raw?: string | null): 'Pass' | 'Fail' | 'Needs Review' 
 /**
  * Returns a styled badge for status
  */
-function renderStatusBadge(statusRaw?: string | null, labelOverride?: string) {
+function renderStatusBadge(statusRaw?: any, labelOverride?: string) {
   const status = normalizeStatus(statusRaw);
-  const label = labelOverride || (status === 'Unknown' ? statusRaw || 'Pending' : status);
+  const rawStr =
+    typeof statusRaw === 'object' && statusRaw !== null
+      ? statusRaw.Value || statusRaw.value || statusRaw.label || status
+      : String(statusRaw || '');
+  const label = labelOverride || (status === 'Unknown' ? rawStr || 'Pending' : status);
 
   if (status === 'Pass') {
     return (
@@ -164,6 +209,7 @@ export const DocumentValidationSection: React.FC<DocumentValidationSectionProps>
   validationDate,
   customerData,
   fallbackDocumentNames = [],
+  isDocumentOnly,
 }) => {
   // Safely parse details if string
   const parsedDetails: DocumentValidationDetails | null = React.useMemo(() => {
@@ -181,53 +227,30 @@ export const DocumentValidationSection: React.FC<DocumentValidationSectionProps>
   const hasValidationData = Boolean(overallStatus || parsedDetails);
 
   if (!hasValidationData) {
-    return (
-      <div
-        style={{
-          backgroundColor: '#FFFFFF',
-          border: '1px solid #E5E7EB',
-          borderRadius: '12px',
-          padding: '20px 24px',
-          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.03)',
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: '12px',
-          boxSizing: 'border-box',
-          width: '100%',
-        }}
-      >
-        <div
-          style={{
-            width: '32px',
-            height: '32px',
-            borderRadius: '8px',
-            backgroundColor: '#F3F4F6',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#6B7280',
-            flexShrink: 0,
-          }}
-        >
-          <FileCheck2 size={18} />
-        </div>
-        <div>
-          <h3 style={{ margin: '0 0 4px 0', fontSize: '15px', fontWeight: 600, color: '#111827' }}>
-            Document Validation Results
-          </h3>
-          <p style={{ margin: 0, fontSize: '12.5px', color: '#6B7280', lineHeight: 1.5 }}>
-            No automated document extraction or validation records are attached to this screening case.
-            When a customer is screened with valid identity documents, AI-extracted validation details will appear here.
-          </p>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   // 1. Normalized Document List
   const docList: DocumentItemValidation[] = React.useMemo(() => {
-    if (Array.isArray(parsedDetails?.documents) && parsedDetails!.documents.length > 0) {
-      return parsedDetails!.documents.map((d: any, idx: number) => {
+    let rawDocs: any =
+      parsedDetails?.documents ||
+      (parsedDetails as any)?.Documents ||
+      (parsedDetails as any)?.uploadedDocuments ||
+      (parsedDetails as any)?.UploadedDocuments ||
+      (parsedDetails as any)?.documentList ||
+      (parsedDetails as any)?.DocumentList ||
+      (parsedDetails as any)?.extractedDocuments;
+
+    if (rawDocs && typeof rawDocs === 'object' && !Array.isArray(rawDocs) && (rawDocs as any).item) {
+      rawDocs = (rawDocs as any).item;
+    }
+    if (!Array.isArray(rawDocs) && rawDocs && typeof rawDocs === 'object') {
+      rawDocs = [rawDocs];
+    }
+
+    if (Array.isArray(rawDocs) && rawDocs.length > 0) {
+      return rawDocs.map((rawDoc: any, idx: number) => {
+        const d = rawDoc?.item && typeof rawDoc.item === 'object' ? rawDoc.item : rawDoc;
         if (typeof d === 'string') {
           return {
             name: d,
@@ -242,10 +265,10 @@ export const DocumentValidationSection: React.FC<DocumentValidationSectionProps>
           };
         }
         return {
-          name: d.name || d.fileName || d.documentName || `Document ${idx + 1}`,
-          type: d.type || d.documentType || d.docType || 'Identity Document',
-          status: d.status || d.validationStatus || d.documentStatus || overallStatus || 'Pass',
-          remarks: d.remarks || d.details || d.comment,
+          name: safeRenderText(d?.name || d?.fileName || d?.documentName, `Document ${idx + 1}`),
+          type: safeRenderText(d?.type || d?.documentType || d?.docType, 'Identity Document'),
+          status: safeRenderText(d?.status || d?.validationStatus || d?.documentStatus || overallStatus, 'Pass'),
+          remarks: safeRenderText(d?.remarks || d?.details || d?.comment, 'Document verified by extraction engine.'),
         };
       });
     }
@@ -272,25 +295,74 @@ export const DocumentValidationSection: React.FC<DocumentValidationSectionProps>
     return [];
   }, [parsedDetails, fallbackDocumentNames, overallStatus]);
 
+  const normOverall = String(overallStatus || '').trim().toLowerCase();
+  const isOverallNotApplicable =
+    !overallStatus ||
+    normOverall === '' ||
+    normOverall.includes('not applicable') ||
+    normOverall.includes('not_applicable') ||
+    normOverall === 'n/a' ||
+    normOverall === 'na' ||
+    normOverall === 'none' ||
+    normOverall === 'null' ||
+    normOverall === 'undefined' ||
+    normOverall.includes('not required');
+
+  // If status is Not Applicable and there are no documents, do not render this component
+  if (isOverallNotApplicable && docList.length === 0) {
+    return null;
+  }
+
   // 2. Customer Data Comparisons (bound to submittedValue, extractedValue, status)
   const customerComparisons = React.useMemo<CustomerComparisonRow[]>(() => {
-    const rawVal = parsedDetails?.customerDataValidation || (parsedDetails as any)?.CustomerDataValidation;
+    let rawVal: any =
+      parsedDetails?.customerDataValidation ||
+      (parsedDetails as any)?.CustomerDataValidation ||
+      (parsedDetails as any)?.customer_data_validation ||
+      (parsedDetails as any)?.fieldValidation ||
+      (parsedDetails as any)?.comparisons ||
+      (parsedDetails as any)?.validationResults;
 
-    // Helper to safely format value or return fallback '—'
-    const safeVal = (v: any): string => {
-      if (v == null) return '—';
-      const s = String(v).trim();
-      return s !== '' ? s : '—';
-    };
+    if (rawVal && typeof rawVal === 'object' && !Array.isArray(rawVal) && (rawVal as any).item) {
+      rawVal = (rawVal as any).item;
+    }
+    if (!Array.isArray(rawVal) && rawVal && typeof rawVal === 'object') {
+      rawVal = [rawVal];
+    }
 
     if (Array.isArray(rawVal) && rawVal.length > 0) {
-      return rawVal.map((item: any) => ({
-        field: item.field || item.fieldName || item.name || 'Field',
-        submittedValue: safeVal(item.submittedValue),
-        extractedValue: safeVal(item.extractedValue),
-        status: item.status || 'Pass',
-        explanation: item.explanation || item.remarks || '',
-      }));
+      return rawVal.map((rawItem: any) => {
+        const item = rawItem?.item && typeof rawItem.item === 'object' ? rawItem.item : rawItem;
+        const submitted =
+          item.submittedValue ??
+          item.submitted ??
+          item.customerProvided ??
+          item.customerValue;
+        const extracted =
+          item.extractedValue ??
+          item.extracted ??
+          item.documentExtracted ??
+          item.docExtracted ??
+          item.documentValue;
+        const status =
+          item.status ??
+          item.comparisonResult ??
+          item.result ??
+          item.matchStatus;
+        const explanation =
+          item.explanation ??
+          item.remarks ??
+          item.details ??
+          item.reason;
+
+        return {
+          field: safeRenderText(item.field || item.fieldName || item.name, 'Field'),
+          submittedValue: safeRenderText(submitted, '—'),
+          extractedValue: safeRenderText(extracted, '—'),
+          status: safeRenderText(status, 'Pass'),
+          explanation: safeRenderText(explanation, ''),
+        };
+      });
     }
 
     // Fallback if structured as object by field keys
@@ -301,18 +373,22 @@ export const DocumentValidationSection: React.FC<DocumentValidationSectionProps>
     ): CustomerComparisonRow => {
       const submittedValue =
         fieldObj?.submittedValue != null
-          ? safeVal(fieldObj.submittedValue)
-          : safeVal(fallbackSubmitted);
+          ? safeRenderText(fieldObj.submittedValue)
+          : fieldObj?.customerProvided != null
+          ? safeRenderText(fieldObj.customerProvided)
+          : safeRenderText(fallbackSubmitted);
 
       const extractedValue =
         fieldObj?.extractedValue != null
-          ? safeVal(fieldObj.extractedValue)
+          ? safeRenderText(fieldObj.extractedValue)
+          : fieldObj?.documentExtracted != null
+          ? safeRenderText(fieldObj.documentExtracted)
           : typeof fieldObj === 'string'
-          ? safeVal(fieldObj)
+          ? safeRenderText(fieldObj)
           : '—';
 
-      const status = fieldObj?.status || overallStatus || 'Pass';
-      const explanation = fieldObj?.explanation || fieldObj?.remarks || '';
+      const status = safeRenderText(fieldObj?.status || fieldObj?.comparisonResult || overallStatus, 'Pass');
+      const explanation = safeRenderText(fieldObj?.explanation || fieldObj?.remarks || fieldObj?.reason, '');
 
       return {
         field: fieldName,
@@ -323,10 +399,37 @@ export const DocumentValidationSection: React.FC<DocumentValidationSectionProps>
       };
     };
 
-    const nameObj = rawVal?.fullName || rawVal?.name || rawVal?.CustomerName || rawVal?.['Full Name'];
-    const dobObj = rawVal?.dob || rawVal?.dateOfBirth || rawVal?.DOB || rawVal?.['Date of Birth'];
-    const natObj = rawVal?.nationality || rawVal?.Nationality;
-    const addrObj = rawVal?.address || rawVal?.Address;
+    const detailsObj = (parsedDetails as any) || {};
+    const nameObj =
+      rawVal?.fullName ||
+      rawVal?.name ||
+      rawVal?.CustomerName ||
+      rawVal?.['Full Name'] ||
+      detailsObj?.fullName ||
+      detailsObj?.name ||
+      detailsObj?.['Full Name'] ||
+      detailsObj?.extractedFullName;
+    const dobObj =
+      rawVal?.dob ||
+      rawVal?.dateOfBirth ||
+      rawVal?.DOB ||
+      rawVal?.['Date of Birth'] ||
+      detailsObj?.dob ||
+      detailsObj?.dateOfBirth ||
+      detailsObj?.['Date of Birth'] ||
+      detailsObj?.extractedDOB;
+    const natObj =
+      rawVal?.nationality ||
+      rawVal?.Nationality ||
+      detailsObj?.nationality ||
+      detailsObj?.Nationality ||
+      detailsObj?.extractedNationality;
+    const addrObj =
+      rawVal?.address ||
+      rawVal?.Address ||
+      detailsObj?.address ||
+      detailsObj?.Address ||
+      detailsObj?.extractedAddress;
 
     return [
       extractFromObj('Full Name', nameObj, customerData.name),
@@ -336,21 +439,50 @@ export const DocumentValidationSection: React.FC<DocumentValidationSectionProps>
     ];
   }, [parsedDetails, customerData, overallStatus]);
 
+  // Check if manual customer data was submitted or if this is document-only
+  const hasSubmittedCustomerData = React.useMemo(() => {
+    if (isDocumentOnly === true) return false;
+    if (isDocumentOnly === false) return true;
+    // Check if customerComparisons have valid submitted values
+    const validSubmitted = customerComparisons.filter((c) => {
+      const v = (c.submittedValue || '').trim();
+      return (
+        v !== '' &&
+        v !== '—' &&
+        v !== '-' &&
+        v !== 'Not available' &&
+        v !== 'null' &&
+        v !== 'undefined' &&
+        !v.startsWith('KYC-')
+      );
+    });
+    return validSubmitted.length > 0;
+  }, [isDocumentOnly, customerComparisons]);
+
   // 3. Cross-Document Validation Details
   const crossDocValidation = React.useMemo(() => {
-    const raw = parsedDetails?.crossDocumentValidation || (parsedDetails as any)?.CrossDocumentValidation;
+    let raw: any = parsedDetails?.crossDocumentValidation || (parsedDetails as any)?.CrossDocumentValidation;
     if (!raw) return null;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && (raw as any).item) {
+      raw = (raw as any).item;
+    }
+    if (Array.isArray(raw) && raw.length > 0) {
+      raw = raw[0];
+    }
 
     if (typeof raw === 'string') {
       return {
-        status: overallStatus || 'Pass',
+        status: safeRenderText(overallStatus, 'Pass'),
         remarks: raw,
       };
     }
 
+    const rawStatus = raw?.status || raw?.validationStatus || overallStatus || 'Pass';
+    const rawRemarks = raw?.remarks || raw?.details || (Array.isArray(raw?.checks) ? raw.checks.join(', ') : raw?.item) || 'Consistent across documents';
+
     return {
-      status: raw.status || raw.validationStatus || overallStatus || 'Pass',
-      remarks: raw.remarks || raw.details || (Array.isArray(raw.checks) ? raw.checks.join(', ') : 'Consistent across documents'),
+      status: safeRenderText(rawStatus, 'Pass'),
+      remarks: safeRenderText(rawRemarks, 'Consistent across documents'),
     };
   }, [parsedDetails, overallStatus]);
 
@@ -402,7 +534,17 @@ export const DocumentValidationSection: React.FC<DocumentValidationSectionProps>
             </h3>
             <p style={{ margin: 0, fontSize: '11.5px', color: '#6B7280' }}>
               AI document extraction and cross-verification against customer data
-              {validationDate ? ` · Evaluated ${new Date(validationDate).toLocaleString()}` : ''}
+              {validationDate ? ` · Evaluated ${(() => {
+                try {
+                  const rawStr = typeof validationDate === 'object' && validationDate !== null
+                    ? (validationDate as any).Value || String(validationDate)
+                    : String(validationDate);
+                  const d = new Date(rawStr);
+                  return isNaN(d.getTime()) ? rawStr : d.toLocaleString();
+                } catch {
+                  return String(validationDate);
+                }
+              })()}` : ''}
             </p>
           </div>
         </div>
@@ -473,7 +615,7 @@ export const DocumentValidationSection: React.FC<DocumentValidationSectionProps>
                     <td style={{ padding: '10px 14px', color: '#111827', fontWeight: 500 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <FileText size={14} color="#6B7280" />
-                        <span>{doc.name}</span>
+                        <span>{safeRenderText(doc.name)}</span>
                       </div>
                     </td>
                     <td style={{ padding: '10px 14px', color: '#4B5563' }}>
@@ -487,14 +629,14 @@ export const DocumentValidationSection: React.FC<DocumentValidationSectionProps>
                           fontWeight: 500,
                         }}
                       >
-                        {doc.type}
+                        {safeRenderText(doc.type)}
                       </span>
                     </td>
                     <td style={{ padding: '10px 14px' }}>
                       {renderStatusBadge(doc.status)}
                     </td>
                     <td style={{ padding: '10px 14px', color: '#6B7280', fontSize: '12px' }}>
-                      {doc.remarks || 'Document verified by extraction engine.'}
+                      {safeRenderText(doc.remarks, 'Document verified by extraction engine.')}
                     </td>
                   </tr>
                 ))}
@@ -504,70 +646,72 @@ export const DocumentValidationSection: React.FC<DocumentValidationSectionProps>
         )}
       </div>
 
-      {/* 3. Customer Data Comparison Results (Full Name, DOB, Nationality, Address) */}
-      <div>
-        <div
-          style={{
-            fontSize: '13px',
-            fontWeight: 600,
-            color: '#374151',
-            marginBottom: '10px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-          }}
-        >
-          <ShieldCheck size={15} color="#831B84" />
-          <span>Customer Data vs Document Extraction</span>
-        </div>
+      {/* 3. Customer Data Comparison Results (Rendered ONLY when NOT document-only AND submitted data exists) */}
+      {!isDocumentOnly && hasSubmittedCustomerData && (
+        <div>
+          <div
+            style={{
+              fontSize: '13px',
+              fontWeight: 600,
+              color: '#374151',
+              marginBottom: '10px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <ShieldCheck size={15} color="#831B84" />
+            <span>Customer Data vs Document Extraction</span>
+          </div>
 
-        <div
-          style={{
-            border: '1px solid #E5E7EB',
-            borderRadius: '8px',
-            overflow: 'hidden',
-          }}
-        >
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px', textAlign: 'left' }}>
-            <thead>
-              <tr style={{ backgroundColor: '#F9FAFB', borderBottom: '1px solid #E5E7EB', color: '#4B5563' }}>
-                <th style={{ padding: '10px 14px', fontWeight: 600 }}>Field</th>
-                <th style={{ padding: '10px 14px', fontWeight: 600 }}>Customer Provided</th>
-                <th style={{ padding: '10px 14px', fontWeight: 600 }}>Document Extracted</th>
-                <th style={{ padding: '10px 14px', fontWeight: 600 }}>Comparison Result</th>
-              </tr>
-            </thead>
-            <tbody>
-              {customerComparisons.map((row, idx) => (
-                <tr
-                  key={idx}
-                  style={{
-                    borderBottom: idx < customerComparisons.length - 1 ? '1px solid #F3F4F6' : 'none',
-                  }}
-                >
-                  <td style={{ padding: '10px 14px', color: '#111827', fontWeight: 500 }}>
-                    {row.field}
-                  </td>
-                  <td style={{ padding: '10px 14px', color: '#1F2937' }}>
-                    {row.submittedValue}
-                  </td>
-                  <td style={{ padding: '10px 14px', color: '#1F2937' }}>
-                    {row.extractedValue}
-                  </td>
-                  <td style={{ padding: '10px 14px' }}>
-                    {renderStatusBadge(row.status, row.status === 'Pass' ? 'Match' : row.status === 'Fail' ? 'Mismatch' : row.status)}
-                    {row.explanation && (
-                      <span style={{ display: 'block', fontSize: '11px', color: '#6B7280', marginTop: '2px' }}>
-                        {row.explanation}
-                      </span>
-                    )}
-                  </td>
+          <div
+            style={{
+              border: '1px solid #E5E7EB',
+              borderRadius: '8px',
+              overflow: 'hidden',
+            }}
+          >
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px', textAlign: 'left' }}>
+              <thead>
+                <tr style={{ backgroundColor: '#F9FAFB', borderBottom: '1px solid #E5E7EB', color: '#4B5563' }}>
+                  <th style={{ padding: '10px 14px', fontWeight: 600 }}>Field</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 600 }}>Customer Provided</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 600 }}>Document Extracted</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 600 }}>Comparison Result</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {customerComparisons.map((row, idx) => (
+                  <tr
+                    key={idx}
+                    style={{
+                      borderBottom: idx < customerComparisons.length - 1 ? '1px solid #F3F4F6' : 'none',
+                    }}
+                  >
+                    <td style={{ padding: '10px 14px', color: '#111827', fontWeight: 500 }}>
+                      {safeRenderText(row.field)}
+                    </td>
+                    <td style={{ padding: '10px 14px', color: '#1F2937' }}>
+                      {safeRenderText(row.submittedValue)}
+                    </td>
+                    <td style={{ padding: '10px 14px', color: '#1F2937' }}>
+                      {safeRenderText(row.extractedValue)}
+                    </td>
+                    <td style={{ padding: '10px 14px' }}>
+                      {renderStatusBadge(row.status, row.status === 'Pass' ? 'Match' : row.status === 'Fail' ? 'Mismatch' : row.status)}
+                      {row.explanation && (
+                        <span style={{ display: 'block', fontSize: '11px', color: '#6B7280', marginTop: '2px' }}>
+                          {safeRenderText(row.explanation)}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* 4. Cross-Document Validation Results */}
       {crossDocValidation && (
@@ -591,7 +735,7 @@ export const DocumentValidationSection: React.FC<DocumentValidationSectionProps>
                 Cross-Document Consistency
               </div>
               <div style={{ fontSize: '12px', color: '#6B21A8', lineHeight: 1.4 }}>
-                {crossDocValidation.remarks}
+                {safeRenderText(crossDocValidation.remarks)}
               </div>
             </div>
           </div>

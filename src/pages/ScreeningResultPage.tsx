@@ -11,9 +11,17 @@ import {
   Info,
   FolderOpen,
 } from 'lucide-react';
-import { kycService, getCurrentUserEmail, normalizeDobToYmd, MOCK_SANCTIONS_LIST } from '../services/kycService';
-import type { KycCase } from '../types/kyc';
-import { DocumentValidationSection } from '../components/screening/DocumentValidationSection';
+import {
+  kycService,
+  getCurrentUserEmail,
+  normalizeDobToYmd,
+  MOCK_SANCTIONS_LIST,
+  extractCustomerFromDocDetails,
+  detectScreeningMethod,
+  extractDocumentNamesFromDocDetails,
+} from '../services/kycService';
+import type { KycCase, ScreeningMethod } from '../types/kyc';
+import { DocumentValidationSection, safeRenderText } from '../components/screening/DocumentValidationSection';
 
 export const ScreeningResultPage: React.FC = () => {
   const { caseId } = useParams<{ caseId: string }>();
@@ -32,57 +40,83 @@ export const ScreeningResultPage: React.FC = () => {
   useEffect(() => {
     async function initCase() {
       setLoading(true);
-      const email = await getCurrentUserEmail();
-      if (email && email !== 'demo.reviewer@xebia.com') {
-        setActiveReviewer(email);
-      }
-
-      if (caseId) {
-        let found = await kycService.getCaseById(caseId);
-        const stateResult = (location.state as any)?.screeningResult;
-        if (!found && stateResult && stateResult.caseId === caseId) {
-          found = stateResult as KycCase;
-        } else if (found && stateResult && stateResult.caseId === caseId) {
-          if (stateResult.documentValidationStatus && !found.documentValidationStatus) {
-            found.documentValidationStatus = stateResult.documentValidationStatus;
-          }
-          if (stateResult.documentValidationDetails && !found.documentValidationDetails) {
-            found.documentValidationDetails = stateResult.documentValidationDetails;
-          }
+      try {
+        const email = await getCurrentUserEmail();
+        if (email && email !== 'demo.reviewer@xebia.com') {
+          setActiveReviewer(email);
         }
 
-        if (found) {
-          setCaseData(found);
-          const hasMatched = Boolean(
-            found.matchedEntry &&
-            found.matchedEntry.trim() !== '' &&
-            found.matchedEntry.toLowerCase() !== 'none' &&
-            found.matchedEntry.toLowerCase() !== 'null' &&
-            found.matchedEntry.toLowerCase() !== '—' &&
-            found.matchedEntry.toLowerCase() !== '-'
-          );
-          const isPotMatch = found.checkResult === 'Potential Match' || hasMatched;
+        if (caseId) {
+          let found = await kycService.getCaseById(caseId);
+          const stateResult = (location.state as any)?.screeningResult;
+          if (!found && stateResult && stateResult.caseId === caseId) {
+            found = stateResult as KycCase;
+          } else if (found && stateResult && stateResult.caseId === caseId) {
+            if (stateResult.customerName && (!found.customerName || found.customerName.startsWith('KYC-') || found.customerName === 'Not available')) {
+              found.customerName = stateResult.customerName;
+            }
+            if (stateResult.nationality && (!found.nationality || found.nationality === 'Not available')) {
+              found.nationality = stateResult.nationality;
+            }
+            if (stateResult.dob && (!found.dob || found.dob === 'Not available')) {
+              found.dob = stateResult.dob;
+            }
+            if (stateResult.address && (!found.address || found.address === 'Not available')) {
+              found.address = stateResult.address;
+            }
+            if (stateResult.documentValidationStatus && !found.documentValidationStatus) {
+              found.documentValidationStatus = stateResult.documentValidationStatus;
+            }
+            if (stateResult.documentValidationDetails && !found.documentValidationDetails) {
+              found.documentValidationDetails = stateResult.documentValidationDetails;
+            }
+            if (stateResult.screeningMethod && !found.screeningMethod) {
+              found.screeningMethod = stateResult.screeningMethod;
+            }
+            if (stateResult.documentNames && stateResult.documentNames.length > 0 && (!found.documentNames || found.documentNames.length === 0)) {
+              found.documentNames = stateResult.documentNames;
+            }
+            if (stateResult.documents && stateResult.documents.length > 0 && (!found.documents || found.documents.length === 0)) {
+              found.documents = stateResult.documents;
+            }
+          }
 
-          // If the case already has a recorded decision (other than 'Pending review')
-          if (found.reviewerDecision && found.reviewerDecision !== 'Pending review') {
-            setIsDecisionRecorded(true);
-            setSelectedDecision(found.reviewerDecision as 'Approved' | 'Rejected' | 'Escalated');
-            if (found.reviewerComment) setComment(found.reviewerComment);
-            setDecidedOnTime(found.decidedOn ? new Date(found.decidedOn).toLocaleString() : 'Recorded');
-          } else {
-            // Case was newly screened (whether Green or Red):
-            // Show interactive reviewer decision section so reviewer can select Approve/Reject/Escalate and add comments
-            setIsDecisionRecorded(false);
-            setSelectedDecision(isPotMatch ? 'Escalated' : 'Approved');
-            if (found.reviewerComment) {
-              setComment(found.reviewerComment);
+          if (found) {
+            setCaseData(found);
+            const hasMatched = Boolean(
+              found.matchedEntry &&
+              found.matchedEntry.trim() !== '' &&
+              found.matchedEntry.toLowerCase() !== 'none' &&
+              found.matchedEntry.toLowerCase() !== 'null' &&
+              found.matchedEntry.toLowerCase() !== '—' &&
+              found.matchedEntry.toLowerCase() !== '-'
+            );
+            const isPotMatch = found.checkResult === 'Potential Match' || hasMatched;
+
+            // If the case already has a recorded decision (other than 'Pending review')
+            if (found.reviewerDecision && found.reviewerDecision !== 'Pending review') {
+              setIsDecisionRecorded(true);
+              setSelectedDecision(found.reviewerDecision as 'Approved' | 'Rejected' | 'Escalated');
+              if (found.reviewerComment) setComment(found.reviewerComment);
+              setDecidedOnTime(found.decidedOn ? new Date(found.decidedOn).toLocaleString() : 'Recorded');
             } else {
-              setComment('');
+              // Case was newly screened (whether Green or Red):
+              // Show interactive reviewer decision section so reviewer can select Approve/Reject/Escalate and add comments
+              setIsDecisionRecorded(false);
+              setSelectedDecision(isPotMatch ? 'Escalated' : 'Approved');
+              if (found.reviewerComment) {
+                setComment(found.reviewerComment);
+              } else {
+                setComment('');
+              }
             }
           }
         }
+      } catch (err) {
+        console.error('[ScreeningResultPage] Error initializing case:', err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     }
 
     initCase();
@@ -99,21 +133,105 @@ export const ScreeningResultPage: React.FC = () => {
   const isPotentialMatch = caseData ? (caseData.checkResult === 'Potential Match' || hasMatchedEntry) : false;
   const currentCaseId = caseData?.caseId || caseId || 'KYC-20261118-194444';
 
-  // Customer Data (dynamically uses live case data from SharePoint)
+  // Screening Method Detection
+  const stateResult = (location.state as any)?.screeningResult;
+  const stateMethod: ScreeningMethod | undefined =
+    (location.state as any)?.screeningMethod || stateResult?.screeningMethod;
+
+  const screeningMethod: ScreeningMethod = detectScreeningMethod(caseData, stateMethod);
+  const isDocumentUpload = screeningMethod === 'documents' || screeningMethod === 'document';
+
+  // Customer Data (dynamically uses live case data from SharePoint and OCR document extraction)
+  const extractedCustomer = React.useMemo(() => {
+    return extractCustomerFromDocDetails(caseData?.documentValidationDetails);
+  }, [caseData?.documentValidationDetails]);
+
+  // Extract document names from DocumentValidationDetails
+  const extractedDocNames = React.useMemo(() => {
+    return extractDocumentNamesFromDocDetails(caseData?.documentValidationDetails);
+  }, [caseData?.documentValidationDetails]);
+
+  // Compute total document count across all available sources:
+  // 1. caseData.documentNames
+  // 2. extractedDocNames from documentValidationDetails
+  // 3. caseData.documents
+  // 4. stateResult.documents or stateResult.documentNames from navigation state
+  const resolvedDocCount = React.useMemo(() => {
+    if (caseData?.documentNames && caseData.documentNames.length > 0) {
+      return caseData.documentNames.length;
+    }
+    if (extractedDocNames.length > 0) {
+      return extractedDocNames.length;
+    }
+    if (caseData?.documents && caseData.documents.length > 0) {
+      return caseData.documents.length;
+    }
+    const stateDocs = (location.state as any)?.documents || (location.state as any)?.screeningResult?.documents;
+    if (Array.isArray(stateDocs) && stateDocs.length > 0) {
+      return stateDocs.length;
+    }
+    const stateDocNames = (location.state as any)?.documentNames || (location.state as any)?.screeningResult?.documentNames;
+    if (Array.isArray(stateDocNames) && stateDocNames.length > 0) {
+      return stateDocNames.length;
+    }
+    // For Document Upload cases, at least 1 document was uploaded
+    if (isDocumentUpload) {
+      return 1;
+    }
+    return 0;
+  }, [caseData, extractedDocNames, location.state, isDocumentUpload]);
+
+  const rawCustName = (caseData?.customerName || '').trim();
+  const isCustNameCaseId =
+    !rawCustName ||
+    rawCustName.startsWith('KYC-') ||
+    (currentCaseId && rawCustName.toLowerCase() === currentCaseId.toLowerCase()) ||
+    rawCustName === 'Unknown Customer';
+
+  // For Document Upload cases: customer information must come from extracted values saved in SharePoint,
+  // not from manual form values or the Case ID. If an extracted field is empty, display "Not available".
+  const resolvedCustomerName = isDocumentUpload
+    ? (extractedCustomer.name || (!isCustNameCaseId && rawCustName && rawCustName !== 'Not available' ? rawCustName : '') || 'Not available')
+    : (!isCustNameCaseId && rawCustName && rawCustName !== 'Not available' ? rawCustName : 'Not available');
+
+  const resolvedDob = isDocumentUpload
+    ? (extractedCustomer.dob || (caseData?.dob && caseData.dob !== 'Not available' && caseData.dob !== '—' ? caseData.dob : '') || 'Not available')
+    : (caseData?.dob && caseData.dob !== 'Not available' && caseData.dob !== '—' ? caseData.dob : 'Not available');
+
+  const rawNationality = (caseData?.nationality || '').trim();
+  const resolvedNationality = isDocumentUpload
+    ? (extractedCustomer.nationality || (rawNationality && rawNationality !== 'Not available' && rawNationality !== '—' ? rawNationality : '') || 'Not available')
+    : (rawNationality && rawNationality !== 'Not available' && rawNationality !== '—' ? rawNationality : 'Not available');
+
+  const rawAddress = (caseData?.address || '').trim();
+  const resolvedAddress = isDocumentUpload
+    ? (extractedCustomer.address || (rawAddress && rawAddress !== 'Not available' && rawAddress !== '—' ? rawAddress : '') || 'Not available')
+    : (rawAddress && rawAddress !== 'Not available' && rawAddress !== '—' ? rawAddress : 'Not available');
+
   const customer = {
-    name: caseData?.customerName || (isPotentialMatch ? 'Markus Thorn' : 'Customer'),
-    dob: normalizeDobToYmd(caseData?.dob || ''),
-    nationality: caseData?.nationality || '—',
-    address: caseData?.address || '—',
-    docCount: caseData?.documentNames?.length || (caseData?.documents?.length ?? 1),
+    name: safeRenderText(resolvedCustomerName, 'Not available'),
+    dob: normalizeDobToYmd(safeRenderText(resolvedDob, '')),
+    nationality: safeRenderText(resolvedNationality, 'Not available'),
+    address: safeRenderText(resolvedAddress, 'Not available'),
+    docCount: resolvedDocCount,
     checkedOn: caseData?.checkedOn
-      ? new Date(caseData.checkedOn).toLocaleString('en-GB', {
-          day: 'numeric',
-          month: 'short',
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        })
+      ? (() => {
+          try {
+            const raw = safeRenderText(caseData.checkedOn);
+            const d = new Date(raw);
+            return isNaN(d.getTime())
+              ? raw
+              : d.toLocaleString('en-GB', {
+                  day: 'numeric',
+                  month: 'short',
+                  year: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                });
+          } catch {
+            return safeRenderText(caseData.checkedOn);
+          }
+        })()
       : '—',
   };
 
@@ -444,7 +562,7 @@ export const ScreeningResultPage: React.FC = () => {
               color: '#111827',
             }}
           >
-            Customer
+            {isDocumentUpload ? 'Extracted Customer Information' : 'Customer Information'}
           </h3>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '13px', flex: 1 }}>
@@ -468,37 +586,41 @@ export const ScreeningResultPage: React.FC = () => {
               <span style={{ color: '#111827' }}>{customer.address}</span>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr' }}>
-              <span style={{ color: '#6B7280' }}>Documents</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ color: '#111827' }}>{customer.docCount} files</span>
-                <span style={{ color: '#9CA3AF' }}>·</span>
-                <span
-                  style={{
-                    color: '#831B84',
-                    textDecoration: 'underline',
-                    cursor: 'pointer',
-                    fontWeight: 500,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                  }}
-                  onClick={() => {
-                    const rawLink = caseData?.documentsLink;
-                    const cid = caseData?.caseId || currentCaseId;
-                    const targetUrl =
-                      rawLink && (rawLink.startsWith('http://') || rawLink.startsWith('https://'))
-                        ? rawLink
-                        : `https://xebiagroup.sharepoint.com/sites/QA/Shared%20Documents/${encodeURIComponent(cid)}`;
-                    window.open(targetUrl, '_blank');
-                  }}
-                  title="Open case documents folder in SharePoint"
-                >
-                  <FolderOpen size={13} />
-                  Open case folder
-                </span>
+            {isDocumentUpload && (
+              <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr' }}>
+                <span style={{ color: '#6B7280' }}>Documents</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ color: '#111827' }}>
+                    {customer.docCount} {customer.docCount === 1 ? 'file' : 'files'}
+                  </span>
+                  <span style={{ color: '#9CA3AF' }}>·</span>
+                  <span
+                    style={{
+                      color: '#831B84',
+                      textDecoration: 'underline',
+                      cursor: 'pointer',
+                      fontWeight: 500,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                    onClick={() => {
+                      const rawLink = caseData?.documentsLink;
+                      const cid = caseData?.caseId || currentCaseId;
+                      const targetUrl =
+                        rawLink && (rawLink.startsWith('http://') || rawLink.startsWith('https://'))
+                          ? rawLink
+                          : `https://xebiagroup.sharepoint.com/sites/QA/Shared%20Documents/${encodeURIComponent(cid)}`;
+                      window.open(targetUrl, '_blank');
+                    }}
+                    title="Open case documents folder in SharePoint"
+                  >
+                    <FolderOpen size={13} />
+                    Open case folder
+                  </span>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
 
@@ -839,19 +961,22 @@ export const ScreeningResultPage: React.FC = () => {
         </div>
       )}
 
-      {/* 4. Document Validation Results Section */}
-      <DocumentValidationSection
-        status={caseData?.documentValidationStatus}
-        details={caseData?.documentValidationDetails}
-        validationDate={caseData?.documentValidationDate}
-        customerData={{
-          name: customer.name,
-          dob: customer.dob,
-          nationality: customer.nationality,
-          address: customer.address,
-        }}
-        fallbackDocumentNames={caseData?.documentNames}
-      />
+      {/* 4. Document Validation Results Section (Mounted ONLY for Document Upload Cases) */}
+      {isDocumentUpload && (
+        <DocumentValidationSection
+          status={caseData?.documentValidationStatus}
+          details={caseData?.documentValidationDetails}
+          validationDate={caseData?.documentValidationDate}
+          customerData={{
+            name: customer.name,
+            dob: customer.dob,
+            nationality: customer.nationality,
+            address: customer.address,
+          }}
+          fallbackDocumentNames={caseData?.documentNames && caseData.documentNames.length > 0 ? caseData.documentNames : extractedDocNames}
+          isDocumentOnly={true}
+        />
+      )}
 
       {/* 5. Row 4: Reviewer Decision Card (Available for BOTH Green and Red until recorded) */}
       <div

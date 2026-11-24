@@ -61,6 +61,7 @@ export const NeedsReviewList: React.FC<NeedsReviewListProps> = ({ cases, pending
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
+        maxHeight: '300px',
         boxSizing: 'border-box',
       }}
     >
@@ -116,11 +117,16 @@ export const NeedsReviewList: React.FC<NeedsReviewListProps> = ({ cases, pending
 
       {/* List */}
       <div
+        className="custom-scrollbar"
         style={{
           display: 'flex',
           flexDirection: 'column',
-          gap: '12px',
+          gap: '10px',
           flex: 1,
+          overflowY: 'auto',
+          minHeight: 0,
+          maxHeight: '204px',
+          paddingRight: '6px',
         }}
       >
         {pendingCases.length === 0 ? (
@@ -164,7 +170,14 @@ export const NeedsReviewList: React.FC<NeedsReviewListProps> = ({ cases, pending
               </div>
 
               <button
-                onClick={() => navigate(`/result/${item.caseId}`)}
+                onClick={() =>
+                  navigate(`/result/${item.caseId}`, {
+                    state: {
+                      screeningResult: item,
+                      screeningMethod: item.screeningMethod,
+                    },
+                  })
+                }
                 style={{
                   backgroundColor: '#FFFFFF',
                   border: '1px solid #D1D5DB',
